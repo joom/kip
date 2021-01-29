@@ -1,0 +1,33 @@
+bir doğruluk
+ya doğru
+ya yanlış
+olabilir.
+
+bir doğal sayı
+ya sıfır
+ya (öncül doğal sayının) ardılı
+olabilir.
+
+(bu doğal sayı ile) (şu doğal sayının) toplamı,
+  bu sıfırsa,
+    şu,
+  değilse
+    (bunun öncülüyle) (şunun bir fazlasının) toplamıdır.
+
+bir sayı listesi
+ya boş
+ya (ilk sayının) (devam sayı listesine) eklenmesi
+olabilir.
+
+(bu sayı listesinin) toplamı,
+  bu boşsa,
+    sıfır,
+  değilse,
+    (bunun elemanıyla) ((bunun devamının) toplamının) toplamıdır.
+
+sıfırın ardılına bir diyelim.
+birin ardılına iki diyelim.
+ikinin ardılına üç diyelim.
+
+(ikiyle üçün toplamını) yazdır.
+((birin (ikinin (üçün boşa eklenmesine) eklenmesine) eklenmesinin) toplamını) yazdır.
