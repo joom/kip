@@ -78,11 +78,12 @@ parseStmt =
       -- n <- identifier 
       -- -- TODO many parseTy
       -- return (n, [("arg", (TyString, Nom))]))
+    ya = lexeme (string "ya")
     ty = do
       lexeme (string "Bir")
       n <- identifier
       ctors <- try (lexeme (string "var olamaz") *> return [])
-           <|> ((many1 (lexeme (string "ya") *> ctor)) <* lexeme (string "olabilir"))
+           <|> ((ya *> sepBy1 ctor (try ya)) <* lexeme (string "olabilir"))
       period
       return (NewType n ctors)
     expFirst = do
