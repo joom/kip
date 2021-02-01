@@ -1,10 +1,13 @@
 {-# LANGUAGE LambdaCase #-}
 module Main where
 
-import Control.Monad.IO.Class
 import System.Exit
 import System.Environment
 import Data.List
+
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.State.Strict
 
 import System.Console.Haskeline
 
@@ -18,7 +21,7 @@ import Data.Version (showVersion)
 
 data ReplState =
   ReplState
-    { ctx :: [String]
+    { replCtx :: [String]
     }
 
 main :: IO ()
@@ -32,10 +35,10 @@ main =
 
       -- Start REPL
       putStrLn $ "Kip " ++ showVersion version ++ "\n=============" 
-      runInputT defaultSettings (loop fsm)
+      runInputT defaultSettings (loop fsm (ReplState []))
    where
-    loop :: FSM -> InputT IO ()
-    loop fsm = do
+    loop :: FSM -> ReplState -> InputT IO ()
+    loop fsm rs = do
       minput <- getInputLine "Kip> "
       case minput of
           Nothing -> return ()
@@ -44,18 +47,20 @@ main =
           Just input 
             | Just word <- stripPrefix ":name " input -> do 
                 liftIO (ups fsm word) >>= \xs -> mapM_ outputStrLn xs
-                loop fsm
+                loop fsm rs
             | Just word <- stripPrefix ":up " input -> do 
                 liftIO (ups fsm word) >>= \xs -> mapM_ outputStrLn xs
-                loop fsm
+                loop fsm rs
             | otherwise -> do 
-                let pst = MkParserState fsm []
+                let pst = MkParserState fsm (replCtx rs)
                 liftIO (parseFromRepl pst input) >>= \case
-                  Left err -> outputStrLn $ "Err: " ++ show err
-                  Right stmt -> do
+                  Left err -> do
+                    outputStrLn $ "Err: " ++ show err
+                    loop fsm rs
+                  Right (stmt, MkParserState _ pctx) -> do
                     outputStrLn $ show stmt
                     liftIO (runEvalM (replStmt stmt) emptyEvalState) >>= \case
                       Left evalErr -> outputStrLn $ "Eval err: " ++ show evalErr
                       Right (res, st) ->
                         return ()
-                loop fsm
+                    loop fsm (rs {replCtx = pctx })

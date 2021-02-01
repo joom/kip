@@ -18,7 +18,7 @@ import Kip.AST
 data ParserState =
   MkParserState
     { fsm :: FSM
-    , ctx :: [String]
+    , parserCtx :: [String]
     }
 
 -- We need [IO] access in here because we need morphological parsing.
@@ -71,7 +71,7 @@ identifier = word <|> parens multiword
 inCtx :: String -> KipParser Bool
 inCtx x = do
   MkParserState{..} <- getState
-  return $ x `elem` ctx
+  return $ x `elem` parserCtx
 
 getPossibleCase :: String -> Maybe (String, Case)
 getPossibleCase s 
@@ -91,7 +91,7 @@ estimateCase :: String -> KipParser (String, Case)
 estimateCase s = do
   MkParserState{..} <- getState
   morphAnalyses <- liftIO (ups fsm s)
-  let matches ma = mapMaybe (\v -> if v `isPrefixOf` ma then Just v else Nothing) ctx
+  let matches ma = mapMaybe (\v -> if v `isPrefixOf` ma then Just v else Nothing) parserCtx
   case filter (not . null) (map matches morphAnalyses) of
     [] -> fail "No nominative matching variable found"
     xs@(_:_:_) -> do
@@ -136,7 +136,7 @@ parseStmt = ty <|> try def <|> expFirst
       i <- identifier
       lexeme (string "diyelim")
       period
-      modifyState (\ps -> ps {ctx = i : (ctx ps)})
+      modifyState (\ps -> ps {parserCtx = i : (parserCtx ps)})
       return (Defn i (TyString Nom) (StrLit Nom "foo"))
     expFirst = do
       e <- parseExp
@@ -154,5 +154,6 @@ removeComments s = go 0 s
                 | n == 0 = c : go n cs
                 | otherwise = go n cs
 
-parseFromRepl :: ParserState -> String -> Outer (Either ParseError Stmt)
-parseFromRepl st input = runParserT parseStmt st "Kip" (removeComments input)
+parseFromRepl :: ParserState -> String -> Outer (Either ParseError (Stmt, ParserState))
+parseFromRepl st input = runParserT p st "Kip" (removeComments input)
+  where p = (,) <$> parseStmt <*> getState
