@@ -1,0 +1,5 @@
+.foma-wasm
+.ghc-wasm
+.wasi-sdk
+.ghc-wasm-meta
+!dist
