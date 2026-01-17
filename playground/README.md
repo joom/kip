@@ -5,21 +5,50 @@ loads it in a simple in-browser UI.
 
 ## Prerequisites
 
-- GHC WASM toolchain (`wasm32-wasi-ghc` and `wasm32-wasi-ghc-pkg`)
-- WASI-enabled C compiler (`wasm32-wasi-clang`)
+You need:
+
+- GHC WASM toolchain (`wasm32-wasi-ghc` + `wasm32-wasi-ghc-pkg`)
+- WASI SDK (`wasm32-wasi-clang`, `llvm-ar`, `llvm-ranlib`)
 - A WASM build of **Foma** (libfoma + headers)
 
-You need a WASM build of Foma because Kip’s morphology layer links against `libfoma`.
-Build Foma for WASI and set:
+The fastest way to get the toolchain on macOS is the official
+`ghc-wasm-meta` setup script, which installs everything into
+`playground/.ghc-wasm`:
 
 ```
-export FOMA_WASM_PREFIX=/absolute/path/to/foma-wasm-install
+git clone https://gitlab.haskell.org/ghc/ghc-wasm-meta.git playground/.ghc-wasm-meta
+cd playground/.ghc-wasm-meta
+FLAVOUR=9.10 PREFIX=/absolute/path/to/kip/playground/.ghc-wasm ./setup.sh
 ```
 
-Where the directory contains:
+Then load the environment:
+
+```
+source /absolute/path/to/kip/playground/.ghc-wasm/env
+export WASI_SDK_PATH=/absolute/path/to/kip/playground/.ghc-wasm/wasi-sdk
+```
+
+The build uses `wasm32-wasi-cabal` and expects `ghc-pkg` to match the
+WASM GHC version. Add a shim once:
+
+```
+ln -sf /absolute/path/to/kip/playground/.ghc-wasm/wasm32-wasi-ghc/bin/wasm32-wasi-ghc-pkg \
+  /absolute/path/to/kip/playground/.ghc-wasm/wasm32-wasi-ghc/bin/ghc-pkg
+```
+
+### Foma WASM build
+
+Kip links against `libfoma`, so you must build Foma for WASI and set:
+
+```
+export FOMA_WASM_PREFIX=/absolute/path/to/kip/playground/foma-wasm
+```
+
+The directory must contain:
 
 ```
 ${FOMA_WASM_PREFIX}/include/fomalib.h
+${FOMA_WASM_PREFIX}/include/fomalibconf.h
 ${FOMA_WASM_PREFIX}/lib/libfoma.a
 ```
 
@@ -29,7 +58,7 @@ This repo includes a helper script that builds a WASI-compatible static
 `libfoma.a` from source:
 
 ```
-export WASI_SDK_PATH=/absolute/path/to/wasi-sdk
+export WASI_SDK_PATH=/absolute/path/to/kip/playground/.ghc-wasm/wasi-sdk
 ./playground/build-foma-wasm.sh
 export FOMA_WASM_PREFIX=/absolute/path/to/kip/playground/foma-wasm
 ```
@@ -45,6 +74,9 @@ FOMA_REF=master \
 ## Build
 
 ```
+source /absolute/path/to/kip/playground/.ghc-wasm/env
+export WASI_SDK_PATH=/absolute/path/to/kip/playground/.ghc-wasm/wasi-sdk
+export FOMA_WASM_PREFIX=/absolute/path/to/kip/playground/foma-wasm
 ./playground/build-wasm.sh
 ```
 
@@ -63,10 +95,10 @@ playground/dist/assets/...
 Serve the `playground/dist` folder with any static server (for example):
 
 ```
-python3 -m http.server --directory playground/dist 8000
+python3 -m http.server --directory playground/dist 8001
 ```
 
-Open `http://localhost:8000` and use the Run button.
+Open `http://localhost:8001` and use the Run button.
 
 ## Notes
 

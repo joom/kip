@@ -35,6 +35,7 @@ library
       Kip.Eval
       Kip.Parser
       Kip.Render
+      Kip.Transpile.JS
       Kip.TypeCheck
       Language.Foma
   other-modules:

@@ -211,7 +211,7 @@ A browser playground build is available under `playground/`. It compiles the
 non-interactive runner (`kip-playground`) to `wasm32-wasi` and ships a small
 HTML/JS harness that runs Kip in the browser.
 
-See `playground/README.md` for prerequisites and build steps.
+See `playground/README.md` for prerequisites, toolchain setup, and build steps.
 
 ## Bytecode Cache
 

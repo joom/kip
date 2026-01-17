@@ -60,6 +60,11 @@ textarea.small {
   gap: 1rem;
 }
 
+.button-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
 button {
   padding: 0.6rem 1.1rem;
   border: none;

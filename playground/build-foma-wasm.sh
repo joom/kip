@@ -8,9 +8,6 @@ FOMA_REF="${FOMA_REF:-master}"
 FOMA_PREFIX="${FOMA_WASM_PREFIX:-${ROOT_DIR}/playground/foma-wasm}"
 ZLIB_REPO="${ZLIB_REPO:-https://github.com/madler/zlib.git}"
 ZLIB_PREFIX="${ZLIB_WASM_PREFIX:-${BUILD_ROOT}/zlib-wasm}"
-BISON_VERSION="${BISON_VERSION:-3.8.2}"
-BISON_PREFIX="${BISON_PREFIX:-${BUILD_ROOT}/bison-${BISON_VERSION}}"
-BISON_TARBALL="${BUILD_ROOT}/bison-${BISON_VERSION}.tar.gz"
 
 if [[ -z "${WASI_SDK_PATH:-}" ]]; then
   echo "WASI_SDK_PATH is not set (should point to the wasi-sdk root)."
@@ -43,6 +40,29 @@ if [[ ! -d "${ZLIB_SRC_DIR}" ]]; then
   git clone "${ZLIB_REPO}" "${ZLIB_SRC_DIR}"
 fi
 
+FOMA_CMAKE="${FOMA_SRC_DIR}/CMakeLists.txt"
+if [[ -f "${FOMA_CMAKE}" ]] && ! grep -q "KIP_WASI_NO_SHARED" "${FOMA_CMAKE}"; then
+  python3 - "${FOMA_CMAKE}" <<'PY'
+from pathlib import Path
+import sys
+
+cmake_path = Path(sys.argv[1])
+lines = cmake_path.read_text().splitlines()
+
+patched = False
+for idx, line in enumerate(lines):
+    if "add_library" in line and "foma-shared" in line and "SHARED" in line:
+        lines[idx] = line.replace("SHARED", "STATIC")
+        patched = True
+        break
+
+if not patched:
+    raise SystemExit("Expected foma-shared SHARED target not found for patching.")
+
+cmake_path.write_text("\n".join(lines) + "\n")
+PY
+fi
+
 rm -rf "${BUILD_DIR}" "${ZLIB_BUILD_DIR}"
 mkdir -p "${BUILD_DIR}" "${ZLIB_BUILD_DIR}"
 
@@ -60,16 +80,13 @@ cmake --build "${ZLIB_BUILD_DIR}"
 cmake --install "${ZLIB_BUILD_DIR}"
 
 if [[ -z "${HOST_BISON}" ]]; then
-  if [[ ! -x "${BISON_PREFIX}/bin/bison" ]]; then
-    curl -L "https://ftp.gnu.org/gnu/bison/bison-${BISON_VERSION}.tar.gz" -o "${BISON_TARBALL}"
-    tar -xzf "${BISON_TARBALL}" -C "${BUILD_ROOT}"
-    pushd "${BUILD_ROOT}/bison-${BISON_VERSION}" >/dev/null
-    ./configure --prefix="${BISON_PREFIX}"
-    make -j4
-    make install
-    popd >/dev/null
-  fi
-  HOST_BISON="${BISON_PREFIX}/bin/bison"
+  HOST_BISON="$(command -v bison || true)"
+fi
+
+if [[ -z "${HOST_BISON}" ]]; then
+  echo "Bison is required to build Foma."
+  echo "Install bison or set BISON_EXECUTABLE to its path."
+  exit 1
 fi
 
 cmake -S "${FOMA_SRC_DIR}" -B "${BUILD_DIR}" \
@@ -84,7 +101,8 @@ cmake -S "${FOMA_SRC_DIR}" -B "${BUILD_DIR}" \
   -DREADLINE_LIBRARIES="" \
   -DZLIB_INCLUDE="${ZLIB_PREFIX}/include" \
   -DZLIB_LIBRARIES="${ZLIB_PREFIX}/lib/libz.a" \
-  -DBISON_EXECUTABLE="${HOST_BISON}"
+  -DBISON_EXECUTABLE="${HOST_BISON}" \
+  -DKIP_WASI_NO_SHARED=ON
 
 cmake --build "${BUILD_DIR}" --target foma-static
 

@@ -21,17 +21,28 @@
       </section>
       <section class="controls">
         <label>
+          Example:
+          <select id="example"></select>
+        </label>
+        <label>
           Diagnostics language:
           <select id="lang">
             <option value="tr">tr</option>
             <option value="en">en</option>
           </select>
         </label>
-        <button id="run">Run</button>
+        <div class="button-row">
+          <button id="run">Run</button>
+          <button id="transpile">Transpile</button>
+        </div>
       </section>
       <section class="panel">
         <label for="output">Output</label>
         <pre id="output"></pre>
+      </section>
+      <section class="panel">
+        <label for="transpiled">Transpiled JavaScript</label>
+        <pre id="transpiled"></pre>
       </section>
     </main>
     <script type="module" src="./playground.js"></script>

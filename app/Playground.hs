@@ -37,12 +37,14 @@ import Kip.Cache
 import Kip.Eval hiding (Unknown, inferType)
 import Kip.Parser
 import Kip.Render
+import Kip.Transpile.JS (transpileProgram)
 import Kip.TypeCheck
 
 -- | Supported CLI modes.
 data CliMode
   = ModeExec
   | ModeBuild
+  | ModeEmitJs
   deriving (Eq, Show)
 
 -- | Parsed CLI options.
@@ -439,6 +441,12 @@ main = do
         runReaderT (loadPreludeState (optNoPrelude opts) buildModuleDirs renderCache fsm upsCache downsCache) renderCtx
       _ <- runReaderT (runFiles False False True preludeBuildPst preludeBuildTC preludeBuildEval buildModuleDirs preludeBuildLoaded buildTargets) renderCtx
       exitSuccess
+    ModeEmitJs -> do
+      when (null (optFiles opts)) $
+        die . T.unpack =<< runReaderT (renderMsg MsgNeedFile) renderCtx
+      js <- runReaderT (emitJsFiles preludePst preludeTC (optFiles opts)) renderCtx
+      TIO.putStrLn js
+      exitSuccess
   where
     cliParser :: Parser CliOptions
     cliParser =
@@ -469,6 +477,7 @@ main = do
     modeParser =
       flag' ModeExec (long "exec" <> help "Run files and exit")
         <|> flag' ModeBuild (long "build" <> help "Build cache files for the given files or directories")
+        <|> flag' ModeEmitJs (long "emit-js" <> help "Emit JavaScript for the given files")
         <|> pure ModeExec
 
     locateTrmorph :: Lang -> IO FilePath
@@ -512,6 +521,42 @@ runFiles :: Bool -> Bool -> Bool -> ParserState -> TCState -> EvalState -> [File
 runFiles showDefn showLoad buildOnly basePst baseTC baseEval moduleDirs loaded files = do
   (pst', tcSt', evalSt', loaded') <- foldM' (runFile showDefn showLoad buildOnly moduleDirs) (basePst, baseTC, baseEval, loaded) files
   return (ReplState (parserCtx pst') (parserTyParams pst') (parserTyCons pst') (parserTyMods pst') (parserPrimTypes pst') tcSt' evalSt' moduleDirs loaded')
+
+-- | Transpile files into a single JS-like output.
+emitJsFiles :: ParserState -> TCState -> [FilePath] -> RenderM Text
+emitJsFiles basePst baseTC files = do
+  (stmts, _, _) <- foldM' emitJsFile ([], basePst, baseTC) files
+  return (transpileProgram stmts)
+  where
+    emitJsFile :: ([Stmt Ann], ParserState, TCState) -> FilePath -> RenderM ([Stmt Ann], ParserState, TCState)
+    emitJsFile (acc, pst, tcSt) path = do
+      exists <- liftIO (doesFileExist path)
+      unless exists $ do
+        ctx <- ask
+        liftIO (emitMsgIO ctx (MsgFileNotFound path))
+        msg <- renderMsg MsgRunFailed
+        liftIO (die (T.unpack msg))
+      input <- liftIO (TIO.readFile path)
+      liftIO (parseFromFile pst input) >>= \case
+        Left err -> do
+          ctx <- ask
+          liftIO (emitMsgIO ctx (MsgParseError err))
+          msg <- renderMsg MsgRunFailed
+          liftIO (die (T.unpack msg))
+        Right (fileStmts, pst') -> do
+          let paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
+              tyMods = parserTyMods pst'
+          liftIO (runTCM (registerForwardDecls fileStmts) tcSt) >>= \case
+            Left tcErr -> do
+              msg <- renderMsg (MsgTCError tcErr (Just input) paramTyCons tyMods)
+              liftIO (die (T.unpack msg))
+            Right (_, tcStWithDecls) ->
+              liftIO (runTCM (mapM tcStmt fileStmts) tcStWithDecls) >>= \case
+                Left tcErr -> do
+                  msg <- renderMsg (MsgTCError tcErr (Just input) paramTyCons tyMods)
+                  liftIO (die (T.unpack msg))
+                Right (typedStmts, tcSt') ->
+                  return (acc ++ typedStmts, pst', tcSt')
 
 -- | REPL runtime state (parser/type context + evaluator).
 data ReplState =
