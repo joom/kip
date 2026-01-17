@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kip Playground</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Kip Playground</h1>
+      </header>
+      <section class="panel">
+        <label for="source">Source</label>
+        <textarea id="source" spellcheck="false"></textarea>
+      </section>
+      <section class="panel">
+        <label for="stdin">Stdin</label>
+        <textarea id="stdin" spellcheck="false" class="small"></textarea>
+      </section>
+      <section class="controls">
+        <label>
+          Diagnostics language:
+          <select id="lang">
+            <option value="tr">tr</option>
+            <option value="en">en</option>
+          </select>
+        </label>
+        <button id="run">Run</button>
+      </section>
+      <section class="panel">
+        <label for="output">Output</label>
+        <pre id="output"></pre>
+      </section>
+    </main>
+    <script type="module" src="./playground.js"></script>
+  </body>
+</html>

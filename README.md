@@ -37,6 +37,7 @@ For you to get a taste of what Kip looks like, here is an example program that p
 - [Language Features](#language-features)
 - [Installation](#installation)
 - [Example Program](#example-program)
+- [WASM Playground](#wasm-playground)
 - [Bytecode Cache](#bytecode-cache)
 - [Project Structure](#project-structure)
 - [Testing](#testing)
@@ -203,6 +204,14 @@ stack exec kip -- --exec path/to/file.kip
 # Install to PATH
 stack install
 ```
+
+## WASM Playground
+
+A browser playground build is available under `playground/`. It compiles the
+non-interactive runner (`kip-playground`) to `wasm32-wasi` and ships a small
+HTML/JS harness that runs Kip in the browser.
+
+See `playground/README.md` for prerequisites and build steps.
 
 ## Bytecode Cache
 
