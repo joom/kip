@@ -245,10 +245,18 @@ app/
 └── Main.hs            - CLI entry point
 
 src/
-├── Kip/               - Core compiler/runtime modules (parser, typecheck, eval, cache)
-└── Language/          - Foma bindings
+├── Kip/
+│   ├── AST.hs         - Abstract syntax tree
+│   ├── Cache.hs       - .iz cache handling
+│   ├── Eval.hs        - Interpreter
+│   ├── Parser.hs      - Parser
+│   ├── Render.hs      - Pretty-printing with morphological inflection
+│   └── TypeCheck.hs   - Type checker validating grammatical case usage
+└── Language/
+    └── Foma.hs        - Haskell bindings to Foma via FFI
 
 lib/
+├── giriş.kip          - Prelude module loaded by default
 ├── temel.kip           - Core types
 ├── temel-doğruluk.kip  - Boolean functions
 ├── temel-dizge.kip     - String functions
@@ -257,7 +265,7 @@ lib/
 └── temel-tam-sayı.kip  - Integer functions
 
 tests/
-├── succeed/            - Passing golden tests (.kip + .out)
+├── succeed/            - Passing golden tests (.kip + .out + optional .in)
 └── fail/               - Failing golden tests (.kip + .err)
 
 vendor/
