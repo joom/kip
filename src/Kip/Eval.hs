@@ -608,9 +608,10 @@ primImpl mPath ident args = do
   case ident of
     ([], "yaz") ->
       case args of
-        [(_, TyString _)] -> Just primWriteString
+        [(_, TyInt _)] -> Just primWrite
+        [(_, TyString _)] -> Just primWrite
         [_, _] -> Just primWriteFile
-        _ -> Just primWrite
+        _ -> Nothing
     ([], "oku") ->
       case args of
         [] -> Just primRead
@@ -664,7 +665,7 @@ primFile ident =
     (["büyük"], "eşitlik") -> Just "temel-tam-sayı.kip"
     _ -> Nothing
 
--- | Primitive print that renders values as needed.
+-- | Primitive print for integers and strings.
 primWrite :: [Exp Ann] -- ^ Arguments.
           -> EvalM (Exp Ann) -- ^ Result expression.
 primWrite args =
@@ -672,30 +673,11 @@ primWrite args =
     [StrLit _ s] -> do
       liftIO (putStrLn (T.unpack s))
       liftIO (hFlush stdout)
-      return (StrLit (mkAnn Nom NoSpan) s)
-    [arg] -> do
-      st <- get
-      rendered <- liftIO (evalRender st st arg)
-      liftIO (putStrLn rendered)
+      return (Var (mkAnn Nom NoSpan) ([], "bitimlik") [(([], "bitimlik"), Nom)])
+    [IntLit _ n] -> do
+      liftIO (print n)
       liftIO (hFlush stdout)
-      return arg
-    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "yaz") []) args)
-
--- | Primitive print specialized for string types.
-primWriteString :: [Exp Ann] -- ^ Arguments.
-                -> EvalM (Exp Ann) -- ^ Result expression.
-primWriteString args =
-  case args of
-    [StrLit _ s] -> do
-      liftIO (putStrLn (T.unpack s))
-      liftIO (hFlush stdout)
-      return (StrLit (mkAnn Nom NoSpan) s)
-    [arg] -> do
-      st <- get
-      rendered <- liftIO (evalRender st st arg)
-      liftIO (putStrLn rendered)
-      liftIO (hFlush stdout)
-      return arg
+      return (Var (mkAnn Nom NoSpan) ([], "bitimlik") [(([], "bitimlik"), Nom)])
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "yaz") []) args)
 
 -- | Primitive read from standard input.
