@@ -1229,9 +1229,11 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
               _ -> (init items, last items)
       st <- getP
       exprItems' <- mapM (restrictCandidates (parserCtx st)) exprItems
-      name <- case nameItem of
+      rawName <- case nameItem of
         Var _ n _ -> return n
         _ -> customFailure ErrDefinitionName
+      -- Normalize the name to strip possessive suffix if present
+      name <- normalizePossessive rawName
       e <- buildApp exprItems'
       lexeme (string "diyelim")
       period
@@ -1471,10 +1473,10 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
             argTy :: Identifier -- ^ Identifier to convert.
                   -> Ty Ann -- ^ Type node.
             argTy ident
-              | ident `elem` parserTyParams = TyVar (mkAnn Nom NoSpan) ident
               | ident `elem` primNames && isIntType ident = TyInt (mkAnn Nom NoSpan)
               | ident `elem` primNames && isStringType ident = TyString (mkAnn Nom NoSpan)
-              | otherwise = TyInd (mkAnn Nom NoSpan) ident
+              | ident `elem` tyNames = TyInd (mkAnn Nom NoSpan) ident
+              |  otherwise = TyVar (mkAnn Nom NoSpan) ident
             -- | Check if an identifier refers to a type in scope.
             isTypeIdent :: Identifier -- ^ Surface identifier.
                         -> KipParser Bool -- ^ True when identifier resolves to a type.

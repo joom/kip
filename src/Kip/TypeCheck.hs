@@ -151,7 +151,12 @@ tcExp1With allowEffect e =
                           if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
                             then return (App annApp fn' args')
                             else lift (throwE (NoMatchingCtor nameForErr argTys tys (annSpan annApp)))
-                    _ -> return (App annApp fn' args')
+                    _ -> do
+                      -- Check if we're trying to apply a type variable as a function (parametric polymorphism violation)
+                      MkTCState{tcVarTys} <- get
+                      case lookupByCandidates tcVarTys varCandidates of
+                        Just (TyVar _ _) -> lift (throwE (NoType (annSpan annApp)))
+                        _ -> return (App annApp fn' args')
                 else do
                   argTys <- mapM inferType args'
                   let argCases = map (annCase . annExp) args'
@@ -376,6 +381,22 @@ tcStmt stmt =
   case stmt of
     Defn name ty e -> do
       e' <- expectOne (tcExp e)
+      -- Check that the inferred type matches the declared type
+      -- Type variables in the declared type are treated as rigid (universally quantified)
+      -- Only apply this check if the declared type contains type variables (polymorphism)
+      -- AND the type annotation is explicit (not the default TyString)
+      mInferredTy <- inferType e'
+      MkTCState{tcTyCons} <- get
+      let explicit = annSpan (annTy ty) /= NoSpan
+          hasTyVars = containsTyVars tcTyCons ty
+      when (explicit && hasTyVars) $ do
+        case mInferredTy of
+          Just inferredTy -> do
+            let matches = tyMatchesRigid tcTyCons inferredTy ty
+            unless matches $ do
+              -- Type error: inferred type doesn't match declared type with rigid type variables
+              lift (throwE (NoType NoSpan))
+          Nothing -> return ()
       modify (\s -> s { tcCtx = name : tcCtx s
                       , tcVals = (name, e') : tcVals s
                       })
@@ -384,6 +405,19 @@ tcStmt stmt =
       let argNames = map fst args
       mRet <- withCtx (name : argNames) (withVarTypes args (inferReturnType body))
       body' <- withCtx (name : argNames) (withFuncRet name (map snd args) mRet (withFuncSig name args (mapM (tcClause args isGerund) body)))
+      -- Check that the inferred return type matches the declared type with rigid type variables
+      -- Only apply this check if the declared type contains type variables (polymorphism)
+      -- AND the type annotation is explicit (not the default TyString)
+      MkTCState{tcTyCons} <- get
+      let explicit = annSpan (annTy ty) /= NoSpan
+          hasTyVars = containsTyVars tcTyCons ty
+      when (explicit && hasTyVars) $ do
+        case mRet of
+          Just inferredRet -> do
+            let matches = tyMatchesRigid tcTyCons inferredRet ty
+            unless matches $
+              lift (throwE (NoType NoSpan))
+          Nothing -> return ()
       modify (\s -> s { tcCtx = name : tcCtx s
                       , tcFuncs = (name, length args) : tcFuncs s
                       , tcFuncSigs = (name, args) : tcFuncSigs s
@@ -683,6 +717,46 @@ typeMatchesAllowUnknown tyCons mTy ty =
     Nothing -> True
     Just t -> tyEq tyCons t ty
 
+-- | Check if a type contains any type variables or undefined type identifiers.
+-- In Kip, undefined type identifiers are treated as implicitly quantified type variables.
+containsTyVars :: [(Identifier, Int)] -- ^ Type constructor arities (defined types).
+               -> Ty Ann -- ^ Type to check.
+               -> Bool -- ^ True if the type contains type variables or undefined types.
+containsTyVars tyCons ty =
+  case ty of
+    TyVar {} -> True
+    TyInd _ name -> name `notElem` map fst tyCons  -- Undefined type = type variable
+    Arr _ d i -> containsTyVars tyCons d || containsTyVars tyCons i
+    TyApp _ c args -> containsTyVars tyCons c || any (containsTyVars tyCons) args
+    _ -> False
+
+-- | Check if an inferred type matches a declared type with rigid type variables.
+-- Type variables in the declared (right) type are treated as universally quantified
+-- and can only match themselves, not concrete types.
+-- Undefined type identifiers (TyInd not in tyCons) are treated as rigid type variables.
+tyMatchesRigid :: [(Identifier, Int)] -- ^ Type constructor arities.
+               -> Ty Ann -- ^ Inferred type.
+               -> Ty Ann -- ^ Declared type (with rigid type variables).
+               -> Bool -- ^ True when the inferred type matches the declared type.
+tyMatchesRigid tyCons inferred declared =
+  let n1 = normalizeTy tyCons inferred
+      n2 = normalizeTy tyCons declared
+      isDefinedType name = name `elem` map fst tyCons
+  in case (n1, n2) of
+    (TyString _, TyString _) -> True
+    (TyInt _, TyInt _) -> True
+    (Arr _ d1 i1, Arr _ d2 i2) -> tyMatchesRigid tyCons d1 d2 && tyMatchesRigid tyCons i1 i2
+    (TyInd _ n1', TyInd _ n2')
+      | isDefinedType n2' -> identMatches n1' n2'  -- Both are defined types, check if they match
+      | otherwise -> n1' == n2'  -- n2' is undefined (type variable), must match exactly
+    (_, TyInd _ n2') | not (isDefinedType n2') -> False  -- Concrete type cannot match rigid type variable
+    (TyVar _ n1', TyVar _ n2') -> n1' == n2'  -- Type variables must match exactly
+    (_, TyVar _ _) -> False  -- Concrete types cannot match rigid type variables
+    (TyVar _ _, _) -> True  -- Flexible type variables in inferred type can match anything
+    (TyApp _ c1 as1, TyApp _ c2 as2) ->
+      tyMatchesRigid tyCons c1 c2 && length as1 == length as2 && and (zipWith (tyMatchesRigid tyCons) as1 as2)
+    _ -> False
+
 -- | Check two types for compatibility.
 tyEq :: [(Identifier, Int)] -- ^ Type constructor arities.
      -> Ty Ann -- ^ Left type.
@@ -696,6 +770,8 @@ tyEq tyCons t1 t2 =
     (TyInt _, TyInt _) -> True
     (Arr _ d1 i1, Arr _ d2 i2) -> tyEq tyCons d1 d2 && tyEq tyCons i1 i2
     (TyInd _ n1', TyInd _ n2') -> identMatches n1' n2'
+    (TyVar {}, Arr {}) -> False  -- Type variables cannot match function types
+    (Arr {}, TyVar {}) -> False  -- Type variables cannot match function types
     (TyVar _ _, _) -> True
     (_, TyVar _ _) -> True
     (TyApp _ c1 as1, TyApp _ c2 as2) ->
@@ -766,7 +842,10 @@ unifyTypes tyCons expected actual =
               if tyEq tyCons bound a
                 then Just subst
                 else Nothing
-            Nothing -> Just ((name, a) : subst)
+            Nothing ->
+              case a of
+                Arr {} -> Nothing  -- Type variables cannot unify with function types
+                _ -> Just ((name, a) : subst)
         TyInd _ n1 ->
           case a of
             TyInd _ n2 | n1 == n2 -> Just subst

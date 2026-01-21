@@ -551,7 +551,7 @@ renderFunctionSignatureParts cache fsm paramTyCons tyMods isGerund name args = d
   nameStr <-
     if isGerund
       then renderGerundName cache fsm name
-      else renderIdentWithCase cache fsm name P3s
+      else renderIdentWithCase cache fsm name (if null args then Nom else P3s)
   return (argsParts, nameStr)
 
 -- | Normalize argument type cases for signature display.
