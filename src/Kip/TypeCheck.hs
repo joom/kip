@@ -17,7 +17,7 @@ import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
 import Data.List (nub, elemIndex, sort, find, foldl')
-import Data.Maybe (fromMaybe, catMaybes, mapMaybe)
+import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust)
 import qualified Data.Text as T
 
 -- | Type checker state for names, signatures, and constructors.
@@ -159,15 +159,38 @@ tcExp1With allowEffect e =
                         _ -> return (App annApp fn' args')
                 else do
                   argTys <- mapM inferType args'
+                  MkTCState{tcVarTys, tcCtors} <- get
                   let argCases = map (annCase . annExp) args'
+                      -- Check if an argument should allow flexible case
+                      shouldAllowFlexibleCase arg = case arg of
+                        Var {varCandidates} ->
+                          -- Allow flexible case only for pattern-bound vars
+                          isJust (lookupByCandidates tcVarTys varCandidates)
+                        IntLit {} -> True  -- Literals get flexible case
+                        StrLit {} -> True
+                        App {fn} -> case fn of
+                          -- If calling a constructor, enforce strict case
+                          Var {varCandidates} ->
+                            case lookupByCandidates tcCtors varCandidates of
+                              Just _ -> False  -- Constructor application - strict case
+                              Nothing -> True  -- Function call - flexible case
+                          _ -> True  -- Other function calls - flexible case
+                        _ -> False  -- Other expressions require strict case matching
                       matchSig argsSig =
                         let expCases = map (annCase . annTy . snd) argsSig
                             argsForSig = fromMaybe args' (reorderByCases expCases argCases args')
                             argTysForSig = fromMaybe argTys (reorderByCases expCases argCases argTys)
+                            argCasesReordered = map (annCase . annExp) argsForSig
                             tys = map snd argsSig
-                        in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTysForSig tys)
-                             then Just argsForSig
-                             else Nothing
+                            -- Check for case mismatches after reordering (unless flexible case is allowed)
+                            hasCaseMismatch = or (zipWith3 checkCaseMismatch expCases argCasesReordered argsForSig)
+                            checkCaseMismatch expCase argCase arg =
+                              expCase /= argCase && not (shouldAllowFlexibleCase arg)
+                        in if hasCaseMismatch
+                             then Nothing  -- Reject case mismatch
+                             else if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTysForSig tys)
+                               then Just argsForSig
+                               else Nothing
                       matches =
                         [ argsForSig
                         | (_, argsSig) <- sigs

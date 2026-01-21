@@ -1,0 +1,10 @@
+Bir doğal-sayı
+ya sıfır
+ya da bir doğal-sayının ardılı
+olabilir.
+
+(bu doğal-sayıyı) bastırmak,
+    bu sıfırsa, "sıfır" yazmaktır,
+    değilse, "başka" yazmaktır.
+
+sıfır bastır.

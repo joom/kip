@@ -13,21 +13,21 @@
   değilse,
     bunla 2'nin asal-denemesidir.
 
-(bu tam-sayıyla) (şu tam-sayıyı) (o tam-sayıyı) (birikim tam-sayı listesini) asal-bulmak,
+(bu tam-sayıyla) (şu tam-sayıyla) (o tam-sayıyla) (birikim tam-sayı listesinin) asalları,
   (bunla şunun eşitliği) doğruysa,
     birikim,
   değilse,
     ((o'nun asallığı) doğruysa,
-      (bunla 1'in toplamını) şu (onla 1'in toplamını)
-        (birikimle (onun boşa ekinin) birleşimini) asal-bulmaktır,
+      (bunla 1'in toplamıyla) şunla (onla 1'in toplamıyla)
+        (birikimle (onun boşa ekinin) birleşiminin) asallarıdır,
     yanlışsa,
-      bunun şunun (onun 1'in toplamını) birikimi asal-bulmaktır).
+      bunla şunla (onun 1'le toplamıyla) birikimin asallarıdır).
 
 (bu tam-sayının) asal-listesi,
   (bunun 0'dan küçük-eşitliği) doğruysa,
     boş,
   değilse,
-    0'ı bunu 2'yi boşu asal-bulmaktır.
+    0'la bunla 2'yle boşun asallarıdır.
 
 (bu tam-sayı listesini) bastırmak,
   bu boşsa,
