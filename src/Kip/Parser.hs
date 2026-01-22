@@ -17,6 +17,8 @@ import Control.Monad.Trans.State.Strict (StateT, get, put, modify, runStateT)
 import Data.Char (isLetter, isDigit)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Builder as TB
 import Data.Void (Void)
 import Data.Hashable (Hashable)
 import qualified Data.HashTable.IO as HT
@@ -1874,15 +1876,15 @@ dropScrutinee allowScrutinee argNames vars =
 -- | Strip nested block comments from source text.
 removeComments :: Text -- ^ Raw source text.
                -> Text -- ^ Source without comments.
-removeComments = go 0
+removeComments = TL.toStrict . TB.toLazyText . go 0
   where
     -- | Recursive comment stripper with nesting depth.
     go :: Int -- ^ Current nesting depth.
        -> Text -- ^ Remaining input.
-       -> Text -- ^ Output text.
+       -> TB.Builder -- ^ Output builder.
     go n txt =
       case T.uncons txt of
-        Nothing -> T.empty
+        Nothing -> mempty
         Just (c, rest) ->
           case T.uncons rest of
             Just ('*', rest')
@@ -1898,10 +1900,10 @@ removeComments = go 0
     step :: Int -- ^ Current nesting depth.
          -> Char -- ^ Current character.
          -> Text -- ^ Remaining input.
-         -> Text -- ^ Output text.
+         -> TB.Builder -- ^ Output builder.
     step n c rest
       | n < 0 = error "Açılışı olmayan yorum kapanışı."
-      | n == 0 = T.cons c (go n rest)
+      | n == 0 = TB.singleton c <> go n rest
       | otherwise = go n rest
 
 -- | Parse a full statement from the REPL input.
