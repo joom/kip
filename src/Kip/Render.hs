@@ -433,6 +433,8 @@ renderTy cache fsm paramTyCons tyMods ty =
       return (ctorStr ++ caseTag (annCase ann))
     TyInt ann ->
       renderIdentWithCase cache fsm ([T.pack "tam"], T.pack "sayı") (annCase ann)
+    TyFloat ann ->
+      renderIdentWithCase cache fsm ([T.pack "ondalık"], T.pack "sayı") (annCase ann)
     TyString ann ->
       renderIdentWithCase cache fsm ([], T.pack "dizge") (annCase ann)
     Arr {} ->
@@ -462,6 +464,8 @@ renderTyNom cache fsm paramTyCons tyMods ty =
       renderTyNom cache fsm paramTyCons tyMods ctor
     TyInt _ ->
       renderIdentWithCase cache fsm ([T.pack "tam"], T.pack "sayı") Nom
+    TyFloat _ ->
+      renderIdentWithCase cache fsm ([T.pack "ondalık"], T.pack "sayı") Nom
     TyString _ ->
       renderIdentWithCase cache fsm ([], T.pack "dizge") Nom
     Arr {} ->
@@ -498,6 +502,9 @@ renderTyParts cache fsm paramTyCons tyMods ty =
       return [(ctorStr ++ caseTag (annCase ann), False)]
     TyInt ann -> do
       s <- renderIdentWithCase cache fsm ([T.pack "tam"], T.pack "sayı") (annCase ann)
+      return [(s, False)]
+    TyFloat ann -> do
+      s <- renderIdentWithCase cache fsm ([T.pack "ondalık"], T.pack "sayı") (annCase ann)
       return [(s, False)]
     TyString ann -> do
       s <- renderIdentWithCase cache fsm ([], T.pack "dizge") (annCase ann)
@@ -570,6 +577,8 @@ renderTyPossessive cache fsm paramTyCons tyMods ty =
       return (ctorStr ++ caseTag (annCase ann))
     TyInt ann ->
       renderIdentWithCases cache fsm ([T.pack "tam"], T.pack "sayı") (possessiveCases (annCase ann))
+    TyFloat ann ->
+      renderIdentWithCases cache fsm ([T.pack "ondalık"], T.pack "sayı") (possessiveCases (annCase ann))
     TyString ann ->
       renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
     Arr ann _ _ ->
@@ -602,6 +611,9 @@ renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
       return [(ctorStr ++ caseTag (annCase ann), False)]
     TyInt ann -> do
       s <- renderIdentWithCases cache fsm ([T.pack "tam"], T.pack "sayı") (possessiveCases (annCase ann))
+      return [(s, False)]
+    TyFloat ann -> do
+      s <- renderIdentWithCases cache fsm ([T.pack "ondalık"], T.pack "sayı") (possessiveCases (annCase ann))
       return [(s, False)]
     TyString ann -> do
       s <- renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
@@ -670,6 +682,7 @@ normalizeSigArgs args =
         TySkolem ann _ -> annCase ann == Loc
         TyApp ann _ _ -> annCase ann == Loc
         TyInt ann -> annCase ann == Loc
+        TyFloat ann -> annCase ann == Loc
         TyString ann -> annCase ann == Loc
         Arr ann _ _ -> annCase ann == Loc
     forceGen :: Ty Ann -- ^ Type to rewrite.
@@ -680,6 +693,7 @@ normalizeSigArgs args =
         TyVar ann name -> TyVar (setAnnCase ann Gen) name
         TySkolem ann name -> TySkolem (setAnnCase ann Gen) name
         TyInt ann -> TyInt (setAnnCase ann Gen)
+        TyFloat ann -> TyFloat (setAnnCase ann Gen)
         TyString ann -> TyString (setAnnCase ann Gen)
         Arr ann d i -> Arr (setAnnCase ann Gen) (forceGen d) (forceGen i)
         TyApp ann ctor args -> TyApp (setAnnCase ann Gen) ctor args
@@ -774,6 +788,8 @@ renderExpWithCase cache fsm evalSt cas exp =
   case exp of
     IntLit {intVal} ->
       renderIntWithCase cache fsm cas intVal
+    FloatLit {floatVal} ->
+      renderFloatWithCase cache fsm cas floatVal
     Var {annExp, varName, varCandidates} ->
       renderVarWithCase cache fsm varName annExp varCandidates cas
     App {fn = Var {varCandidates}, args} ->
@@ -817,6 +833,8 @@ renderExpNom cache fsm evalSt exp =
   case exp of
     IntLit {intVal} ->
       renderIntWithCase cache fsm Nom intVal
+    FloatLit {floatVal} ->
+      renderFloatWithCase cache fsm Nom floatVal
     Var {annExp, varName, varCandidates} ->
       renderVarWithCase cache fsm varName annExp varCandidates Nom
     App {fn = Var {varCandidates}, args} ->
@@ -852,6 +870,8 @@ renderFallback cache fsm evalSt exp =
       return ("\"" ++ T.unpack lit ++ "\"")
     IntLit {intVal} ->
       renderIntWithCase cache fsm Nom intVal
+    FloatLit {floatVal} ->
+      renderFloatWithCase cache fsm Nom floatVal
     Seq {} ->
       return (prettyExp exp)
     Bind {} ->
@@ -904,6 +924,21 @@ renderIntWithCase :: RenderCache -- ^ Render cache.
                   -> Integer -- ^ Integer value.
                   -> IO String -- ^ Rendered integer.
 renderIntWithCase cache fsm cas n = do
+  let base = show (abs n)
+      prefix = if n < 0 then "-" else ""
+  if cas == Nom
+    then return (prefix ++ base)
+    else do
+      inflected <- renderIdentWithCases cache fsm ([], T.pack base) [cas]
+      return (prefix ++ inflected)
+
+-- | Render a floating-point number, applying case when requested.
+renderFloatWithCase :: RenderCache -- ^ Render cache.
+                    -> FSM -- ^ Morphology FSM.
+                    -> Case -- ^ Target case.
+                    -> Double -- ^ Floating-point value.
+                    -> IO String -- ^ Rendered floating-point number.
+renderFloatWithCase cache fsm cas n = do
   let base = show (abs n)
       prefix = if n < 0 then "-" else ""
   if cas == Nom

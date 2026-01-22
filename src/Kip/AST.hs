@@ -90,6 +90,7 @@ mergeSpan a b =
 data Ty a =
     TyString { annTy :: a } -- ^ String type.
   | TyInt    { annTy :: a } -- ^ Integer type.
+  | TyFloat  { annTy :: a } -- ^ Floating-point type.
   | Arr      { annTy :: a , dom :: Ty a, img :: Ty a } -- ^ Function type.
   | TyInd    { annTy :: a , indName :: Identifier } -- ^ Named type.
   | TyVar    { annTy :: a , tyVarName :: Identifier } -- ^ Type variable.
@@ -103,6 +104,7 @@ data Exp a =
   | App    { annExp :: a , fn :: Exp a , args :: [Exp a] } -- ^ Function application.
   | StrLit { annExp :: a , lit :: Text } -- ^ String literal.
   | IntLit { annExp :: a , intVal :: Integer } -- ^ Integer literal.
+  | FloatLit { annExp :: a , floatVal :: Double } -- ^ Floating-point literal.
   | Bind   { annExp :: a , bindName :: Identifier , bindExp :: Exp a } -- ^ Binding expression.
   | Seq    { annExp :: a , first :: Exp a , second :: Exp a } -- ^ Sequential composition.
   | Match  { annExp :: a , scrutinee :: Exp a , clauses :: [Clause a] } -- ^ Pattern match.
@@ -174,6 +176,7 @@ prettyExp :: Exp a -- ^ Expression to render.
 prettyExp (Var _ name _) = T.unpack (T.intercalate "-" (fst name ++ [snd name]))
 prettyExp (StrLit _ s) = show (T.unpack s)
 prettyExp (IntLit _ n) = show n
+prettyExp (FloatLit _ n) = show n
 prettyExp (Bind _ name e) =
   T.unpack (T.intercalate "-" (fst name ++ [snd name])) ++ " olarak " ++ prettyExp e
 prettyExp (Seq _ a b) =

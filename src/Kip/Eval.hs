@@ -28,6 +28,7 @@ import qualified Data.Text.IO as TIO
 import Text.Read (readMaybe)
 import Data.Maybe (catMaybes)
 import Data.List (find, foldl', intersect, nub)
+import Data.Fixed (mod')
 
 -- | Evaluator state: runtime bindings plus render function.
 data EvalState =
@@ -106,6 +107,8 @@ evalExpWith localEnv e =
       return (StrLit annExp lit)
     IntLit {annExp, intVal} ->
       return (IntLit annExp intVal)
+    FloatLit {annExp, floatVal} ->
+      return (FloatLit annExp floatVal)
     Bind {annExp, bindName, bindExp} -> do
       v <- evalExpWith localEnv bindExp
       return (Bind annExp bindName v)
@@ -414,6 +417,7 @@ inferType :: Exp Ann -- ^ Expression to infer.
 inferType e =
   case e of
     IntLit {} -> return (Just (TyInt (mkAnn Nom NoSpan)))
+    FloatLit {} -> return (Just (TyFloat (mkAnn Nom NoSpan)))
     StrLit {} -> return (Just (TyString (mkAnn Nom NoSpan)))
     Bind {bindExp} -> inferType bindExp
     Seq {second} -> inferType second
@@ -457,6 +461,8 @@ applyTypeCase cas exp =
       in Var (setAnnCase ann cas) name candidates'
     IntLit ann n ->
       IntLit (setAnnCase ann cas) n
+    FloatLit ann n ->
+      FloatLit (setAnnCase ann cas) n
     _ -> exp
 
 -- | Check whether an inferred type matches an expected type.
@@ -480,6 +486,7 @@ tyEq tyCons t1 t2 =
   in case (n1, n2) of
     (TyString _, TyString _) -> True
     (TyInt _, TyInt _) -> True
+    (TyFloat _, TyFloat _) -> True
     (Arr _ d1 i1, Arr _ d2 i2) -> tyEq tyCons d1 d2 && tyEq tyCons i1 i2
     (TyInd _ n1', TyInd _ n2') -> identMatches n1' n2'
     (TySkolem _ n1', TySkolem _ n2') -> n1' == n2'
@@ -500,6 +507,7 @@ normalizeTy :: [(Identifier, Int)] -- ^ Type constructor arities.
 normalizeTy tyCons ty =
   case ty of
     TyInt {} -> ty
+    TyFloat {} -> ty
     TySkolem {} -> ty
     TyApp ann (TyInd _ name) args ->
       case lookup name tyCons of
@@ -590,6 +598,8 @@ applySubst subst ty =
         Just t -> t
         Nothing -> TyVar ann name
     TySkolem {} -> ty
+    TyInt {} -> ty
+    TyFloat {} -> ty
     TyInd {} -> ty
     TyString {} -> ty
     Arr ann d i -> Arr ann (applySubst subst d) (applySubst subst i)
@@ -663,35 +673,100 @@ primImpl :: Maybe FilePath -- ^ Current file path.
 primImpl mPath ident args = do
   guard (primFileMatches mPath ident)
   case ident of
-    ([], "yaz") ->
-      case args of
-        [(_, TyInt _)] -> Just primWrite
-        [(_, TyString _)] -> Just primWrite
-        [_, _] -> Just primWriteFile
-        _ -> Nothing
-    ([], "oku") ->
-      case args of
-        [] -> Just primRead
-        [_] -> Just primReadFile
-        _ -> Just primRead
+    ([], "yaz")
+      | [(_, TyInt _)] <- args -> Just primWrite
+      | [(_, TyFloat _)] <- args -> Just primWrite
+      | [(_, TyString _)] <- args -> Just primWrite
+      | [_, _] <- args -> Just primWriteFile
+      | otherwise -> Nothing
+    ([], "oku")
+      | [] <- args -> Just primRead
+      | [(_, TyString _)] <- args -> Just primReadFile
+      | otherwise -> Nothing
     ([], "uzunluk") -> Just primStringLength
     ([], "birleşim") -> Just primStringConcat
     (["tam", "sayı"], "hal") -> Just primStringToInt
-    ([], "ters") ->
-      case args of
-        [(_, TyString _)] -> Just primStringReverse
-        _ -> Nothing
-    ([], "toplam") -> Just (primIntBin "toplam" (+))
-    ([], "çarpım") -> Just (primIntBin "çarpım" (*))
-    ([], "fark") -> Just (primIntBin "fark" (-))
-    ([], "bölüm") -> Just primIntDiv
-    ([], "kalan") -> Just primIntMod
-    (["dizge"], "hal") -> Just primIntToString
-    ([], "eşitlik") -> Just (primIntCmp "eşitlik" (==))
-    ([], "küçüklük") -> Just (primIntCmp "küçüklük" (<))
-    (["küçük"], "eşitlik") -> Just (primIntCmp "küçük-eşitlik" (<=))
-    ([], "büyüklük") -> Just (primIntCmp "büyüklük" (>))
-    (["büyük"], "eşitlik") -> Just (primIntCmp "büyük-eşitlik" (>=))
+    (["ondalık", "sayı"], "hal") -> Just primStringToFloat
+    ([], "ters")
+      | [(_, TyString _)] <- args -> Just primStringReverse
+      | otherwise -> Nothing
+    ([], "toplam")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatBin "toplam" (+))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntBin "toplam" (+))
+      | otherwise ->
+          Nothing
+    ([], "çarpım")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatBin "çarpım" (*))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntBin "çarpım" (*))
+      | otherwise ->
+          Nothing
+    ([], "fark")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatBin "fark" (-))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntBin "fark" (-))
+      | otherwise ->
+          Nothing
+    ([], "bölüm")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just primFloatDiv
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just primIntDiv
+      | otherwise ->
+          Nothing
+    ([], "kalan")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just primFloatMod
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just primIntMod
+      | otherwise ->
+          Nothing
+    (["dizge"], "hal")
+      | [(_, TyFloat _)] <- args ->
+          Just primFloatToString
+      | [(_, TyInt _)] <- args ->
+          Just primIntToString
+      | otherwise ->
+          Nothing
+    ([], "eşitlik")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatCmp "eşitlik" (==))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntCmp "eşitlik" (==))
+      | otherwise ->
+          Nothing
+    ([], "küçüklük")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatCmp "küçüklük" (<))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntCmp "küçüklük" (<))
+      | otherwise ->
+          Nothing
+    (["küçük"], "eşitlik")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatCmp "küçük-eşitlik" (<=))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntCmp "küçük-eşitlik" (<=))
+      | otherwise ->
+          Nothing
+    ([], "büyüklük")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatCmp "büyüklük" (>))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntCmp "büyüklük" (>))
+      | otherwise ->
+          Nothing
+    (["büyük"], "eşitlik")
+      | [(_, TyFloat _), (_, TyFloat _)] <- args ->
+          Just (primFloatCmp "büyük-eşitlik" (>=))
+      | [(_, TyInt _), (_, TyInt _)] <- args ->
+          Just (primIntCmp "büyük-eşitlik" (>=))
+      | otherwise ->
+          Nothing
     (["sayı"], "çek") -> Just primIntRandom
     ([], "sayı-çek") -> Just primIntRandom
     _ -> Nothing
@@ -701,35 +776,36 @@ primFileMatches :: Maybe FilePath -- ^ Current file path.
                 -> Identifier -- ^ Primitive name.
                 -> Bool -- ^ True when primitive belongs to file.
 primFileMatches mPath ident =
-  case (mPath, primFile ident) of
-    (Just path, Just primPath) -> takeFileName path == primPath
+  case mPath of
+    Just path -> takeFileName path `elem` primFiles ident
     _ -> False
 
--- | Map a primitive identifier to the file that defines it.
-primFile :: Identifier -- ^ Primitive identifier.
-         -> Maybe FilePath -- ^ Source file path when present.
-primFile ident =
+-- | Map a primitive identifier to the files that define it.
+primFiles :: Identifier -- ^ Primitive identifier.
+          -> [FilePath] -- ^ Source file paths when present.
+primFiles ident =
   case ident of
-    ([], "yaz") -> Just "temel-etki.kip"
-    ([], "oku") -> Just "temel-etki.kip"
-    ([], "uzunluk") -> Just "temel-dizge.kip"
-    ([], "birleşim") -> Just "temel-dizge.kip"
-    (["tam", "sayı"], "hal") -> Just "temel-dizge.kip"
-    ([], "ters") -> Just "temel-dizge.kip"
-    ([], "toplam") -> Just "temel-tam-sayı.kip"
-    ([], "çarpım") -> Just "temel-tam-sayı.kip"
-    ([], "fark") -> Just "temel-tam-sayı.kip"
-    ([], "bölüm") -> Just "temel-tam-sayı.kip"
-    ([], "kalan") -> Just "temel-tam-sayı.kip"
-    (["dizge"], "hal") -> Just "temel-tam-sayı.kip"
-    ([], "eşitlik") -> Just "temel-tam-sayı.kip"
-    ([], "küçüklük") -> Just "temel-tam-sayı.kip"
-    (["küçük"], "eşitlik") -> Just "temel-tam-sayı.kip"
-    ([], "büyüklük") -> Just "temel-tam-sayı.kip"
-    (["büyük"], "eşitlik") -> Just "temel-tam-sayı.kip"
-    (["sayı"], "çek") -> Just "temel-etki.kip"
-    ([], "sayı-çek") -> Just "temel-etki.kip"
-    _ -> Nothing
+    ([], "yaz") -> ["temel-etki.kip"]
+    ([], "oku") -> ["temel-etki.kip"]
+    ([], "uzunluk") -> ["temel-dizge.kip"]
+    ([], "birleşim") -> ["temel-dizge.kip"]
+    (["tam", "sayı"], "hal") -> ["temel-dizge.kip"]
+    (["ondalık", "sayı"], "hal") -> ["temel-dizge.kip"]
+    ([], "ters") -> ["temel-dizge.kip"]
+    ([], "toplam") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "çarpım") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "fark") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "bölüm") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "kalan") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    (["dizge"], "hal") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "eşitlik") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "küçüklük") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    (["küçük"], "eşitlik") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    ([], "büyüklük") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    (["büyük"], "eşitlik") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
+    (["sayı"], "çek") -> ["temel-etki.kip"]
+    ([], "sayı-çek") -> ["temel-etki.kip"]
+    _ -> []
 
 -- | Primitive print for integers and strings.
 primWrite :: [Exp Ann] -- ^ Arguments.
@@ -741,6 +817,10 @@ primWrite args =
       liftIO (hFlush stdout)
       return (Var (mkAnn Nom NoSpan) ([], "bitimlik") [(([], "bitimlik"), Nom)])
     [IntLit _ n] -> do
+      liftIO (print n)
+      liftIO (hFlush stdout)
+      return (Var (mkAnn Nom NoSpan) ([], "bitimlik") [(([], "bitimlik"), Nom)])
+    [FloatLit _ n] -> do
       liftIO (print n)
       liftIO (hFlush stdout)
       return (Var (mkAnn Nom NoSpan) ([], "bitimlik") [(([], "bitimlik"), Nom)])
@@ -871,6 +951,21 @@ primStringToInt args =
           return (Var (mkAnn Nom NoSpan) ([], "yokluk") [(([], "yokluk"), Nom)])
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "tam-sayı-hali") []) args)
 
+-- | Primitive to parse a string into a floating-point option.
+primStringToFloat :: [Exp Ann] -- ^ Arguments.
+                  -> EvalM (Exp Ann) -- ^ Result expression.
+primStringToFloat args =
+  case args of
+    [StrLit ann s] ->
+      case readMaybe (T.unpack s) of
+        Just n ->
+          return
+            (App ann (Var (mkAnn Nom NoSpan) ([], "varlık") [(([], "varlık"), Nom)])
+              [FloatLit ann n])
+        Nothing ->
+          return (Var (mkAnn Nom NoSpan) ([], "yokluk") [(([], "yokluk"), Nom)])
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "ondalık-sayı-hali") []) args)
+
 -- | Primitive integer binary operator.
 primIntBin :: Text -- ^ Operator name.
            -> (Integer -> Integer -> Integer) -- ^ Integer operator.
@@ -882,6 +977,17 @@ primIntBin fname op args =
       return (IntLit ann (op a b))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], fname) []) args)
 
+-- | Primitive floating-point binary operator.
+primFloatBin :: Text -- ^ Operator name.
+             -> (Double -> Double -> Double) -- ^ Floating operator.
+             -> [Exp Ann] -- ^ Arguments.
+             -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatBin fname op args =
+  case args of
+    [FloatLit ann a, FloatLit _ b] ->
+      return (FloatLit ann (op a b))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], fname) []) args)
+
 -- | Primitive integer division (division by zero yields 0).
 primIntDiv :: [Exp Ann] -- ^ Arguments.
            -> EvalM (Exp Ann) -- ^ Result expression.
@@ -891,6 +997,15 @@ primIntDiv args =
       return (IntLit ann (if b == 0 then 0 else a `div` b))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "bölüm") []) args)
 
+-- | Primitive floating-point division (division by zero yields 0.0).
+primFloatDiv :: [Exp Ann] -- ^ Arguments.
+             -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatDiv args =
+  case args of
+    [FloatLit ann a, FloatLit _ b] ->
+      return (FloatLit ann (if b == 0 then 0 else a / b))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "bölüm") []) args)
+
 -- | Primitive integer modulo (division by zero yields 0).
 primIntMod :: [Exp Ann] -- ^ Arguments.
            -> EvalM (Exp Ann) -- ^ Result expression.
@@ -898,6 +1013,15 @@ primIntMod args =
   case args of
     [IntLit ann a, IntLit _ b] ->
       return (IntLit ann (if b == 0 then 0 else a `mod` b))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "kalan") []) args)
+
+-- | Primitive floating-point modulo (division by zero yields 0.0).
+primFloatMod :: [Exp Ann] -- ^ Arguments.
+             -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatMod args =
+  case args of
+    [FloatLit ann a, FloatLit _ b] ->
+      return (FloatLit ann (if b == 0 then 0 else mod' a b))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "kalan") []) args)
 
 -- | Primitive integer random in inclusive bounds.
@@ -945,12 +1069,32 @@ primIntCmp fname op args =
       return (boolToExp (op a b))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], fname) []) args)
 
+-- | Primitive floating-point comparison operator.
+primFloatCmp :: Text -- ^ Operator name.
+             -> (Double -> Double -> Bool) -- ^ Predicate.
+             -> [Exp Ann] -- ^ Arguments.
+             -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatCmp fname op args =
+  case args of
+    [FloatLit _ a, FloatLit _ b] ->
+      return (boolToExp (op a b))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], fname) []) args)
+
 -- | Primitive integer to string conversion.
 primIntToString :: [Exp Ann] -- ^ Arguments.
                 -> EvalM (Exp Ann) -- ^ Result expression.
 primIntToString args =
   case args of
     [IntLit ann n] ->
+      return (StrLit ann (T.pack (show n)))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) (["dizge"], "hal") []) args)
+
+-- | Primitive floating-point to string conversion.
+primFloatToString :: [Exp Ann] -- ^ Arguments.
+                  -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatToString args =
+  case args of
+    [FloatLit ann n] ->
       return (StrLit ann (T.pack (show n)))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) (["dizge"], "hal") []) args)
 

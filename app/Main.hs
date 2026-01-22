@@ -1095,6 +1095,7 @@ main = do
           case ty of
             TyString ann -> TyString (setAnnCase ann Nom)
             TyInt ann -> TyInt (setAnnCase ann Nom)
+            TyFloat ann -> TyFloat (setAnnCase ann Nom)
             TyInd ann name -> TyInd (setAnnCase ann Nom) name
             TyVar ann name -> TyVar (setAnnCase ann Nom) name
             TySkolem ann name -> TySkolem (setAnnCase ann Nom) name

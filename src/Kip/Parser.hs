@@ -844,8 +844,13 @@ parseExpWithCtx useCtx =
     numberLiteral = do
       (token, sp) <- withSpan parseNumberToken
       cas <- numberCase token
-      let val = parseNumberValue token
-      return (IntLit (mkAnn cas sp) val)
+      if isFloatToken token
+        then
+          let val = parseNumberValueFloat token
+          in return (FloatLit (mkAnn cas sp) val)
+        else
+          let val = parseNumberValue token
+          in return (IntLit (mkAnn cas sp) val)
     -- | Parse a string literal with case.
     stringLiteral :: KipParser (Exp Ann) -- ^ Parsed string literal.
     stringLiteral = do
@@ -920,6 +925,7 @@ parseExpWithCtx useCtx =
             case arg of
               StrLit{} -> False  -- String literal is not a scrutinee
               IntLit{} -> False  -- Int literal is not a scrutinee
+              FloatLit{} -> False  -- Float literal is not a scrutinee
               _ -> True
           [] -> False
       Var {annExp = ann} -> annCase ann == Cond
@@ -1062,6 +1068,8 @@ parseExpWithCtx useCtx =
                         Just (Var (setAnnCase annX cas) name (preferCase candX cas))
                       IntLit annX n ->
                         Just (IntLit (setAnnCase annX cas) n)
+                      FloatLit annX n ->
+                        Just (FloatLit (setAnnCase annX cas) n)
                       _ -> Nothing
                 _ -> return Nothing
         _ -> return Nothing
@@ -1248,6 +1256,8 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
         (ident, _):_
           | ident `elem` parserPrimTypes && isIntType ident -> return (TyInt ann)
         (ident, _):_
+          | ident `elem` parserPrimTypes && isFloatType ident -> return (TyFloat ann)
+        (ident, _):_
           | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann)
         _ ->
           if nameForTy `elem` tyNames
@@ -1286,8 +1296,13 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
     defItemNumberLit = do
       (token, sp) <- withSpan parseNumberToken
       cas <- numberCase token
-      let val = parseNumberValue token
-      return (IntLit (mkAnn cas sp) val)
+      if isFloatToken token
+        then
+          let val = parseNumberValueFloat token
+          in return (FloatLit (mkAnn cas sp) val)
+        else
+          let val = parseNumberValue token
+          in return (IntLit (mkAnn cas sp) val)
     -- | Parse a definition item as a variable.
     defItemVar :: KipParser (Exp Ann) -- ^ Parsed definition item variable.
     defItemVar = do
@@ -1419,9 +1434,11 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
       let ann = mkAnn cas sp
       if name `elem` parserPrimTypes && isIntType name
         then return (TyInt ann)
-        else if name `elem` parserPrimTypes && isStringType name
-          then return (TyString ann)
-          else return (TyVar ann name)
+        else if name `elem` parserPrimTypes && isFloatType name
+          then return (TyFloat ann)
+          else if name `elem` parserPrimTypes && isStringType name
+            then return (TyString ann)
+            else return (TyVar ann name)
     -- | Parse a function body without explicit clauses.
     parseBodyOnly :: KipParser [Clause Ann] -- ^ Parsed clauses.
     parseBodyOnly = do
@@ -1506,6 +1523,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
                   -> Ty Ann -- ^ Type node.
             argTy ident
               | ident `elem` primNames && isIntType ident = TyInt (mkAnn Nom NoSpan)
+              | ident `elem` primNames && isFloatType ident = TyFloat (mkAnn Nom NoSpan)
               | ident `elem` primNames && isStringType ident = TyString (mkAnn Nom NoSpan)
               | ident `elem` tyNames = TyInd (mkAnn Nom NoSpan) ident
               |  otherwise = TyVar (mkAnn Nom NoSpan) ident
@@ -1534,9 +1552,11 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
                 ann = mkAnn cas' sp
             if name `elem` primNames && isIntType name
               then return (TyInt ann)
-              else if name `elem` primNames && isStringType name
-                then return (TyString ann)
-                else return (TyApp ann (TyInd (mkAnn Nom NoSpan) name) [argTy t])
+              else if name `elem` primNames && isFloatType name
+                then return (TyFloat ann)
+                else if name `elem` primNames && isStringType name
+                  then return (TyString ann)
+                  else return (TyApp ann (TyInd (mkAnn Nom NoSpan) name) [argTy t])
           Nothing -> do
             case rawIdent of
               (xs, xraw) | not (null xs) -> do
@@ -1553,22 +1573,26 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
                     let cas'' = preferSurfaceCase rawIdent cas'
                     if name `elem` primNames && isIntType name
                       then return (TyInt (mkAnn cas'' sp))
-                      else if name `elem` primNames && isStringType name
-                        then return (TyString (mkAnn cas'' sp))
-                        else if name `elem` parserTyParams
-                          then return (TyVar (mkAnn cas'' sp) name)
-                          else return (TyInd (mkAnn cas'' sp) name)
+                      else if name `elem` primNames && isFloatType name
+                        then return (TyFloat (mkAnn cas'' sp))
+                        else if name `elem` primNames && isStringType name
+                          then return (TyString (mkAnn cas'' sp))
+                          else if name `elem` parserTyParams
+                            then return (TyVar (mkAnn cas'' sp) name)
+                            else return (TyInd (mkAnn cas'' sp) name)
               _ -> do
                 (name, cas) <- resolveTypeCandidatePreferCtx rawIdent
                 requireInCtx name
                 let cas' = preferSurfaceCase rawIdent cas
                 if name `elem` primNames && isIntType name
                   then return (TyInt (mkAnn cas' sp))
-                  else if name `elem` primNames && isStringType name
-                    then return (TyString (mkAnn cas' sp))
-                    else if name `elem` parserTyParams
-                      then return (TyVar (mkAnn cas' sp) name)
-                      else return (TyInd (mkAnn cas' sp) name)
+                  else if name `elem` primNames && isFloatType name
+                    then return (TyFloat (mkAnn cas' sp))
+                    else if name `elem` primNames && isStringType name
+                      then return (TyString (mkAnn cas' sp))
+                      else if name `elem` parserTyParams
+                        then return (TyVar (mkAnn cas' sp) name)
+                        else return (TyInd (mkAnn cas' sp) name)
     -- | Parse a type name with a modifier prefix.
     parseModifiedType :: KipParser (Ty Ann) -- ^ Parsed type.
     parseModifiedType = do
@@ -1681,18 +1705,19 @@ parseNumberToken :: KipParser Text -- ^ Parsed numeric token.
 parseNumberToken = do
   sign <- optional (char '-')
   digits <- takeWhile1P (Just "sayı") isDigit
+  frac <- optional (try (char '.' *> takeWhile1P (Just "sayı") isDigit))
   suffix <- optional (char '\'' *> takeWhile1P (Just "ek") isLetter)
   let prefix = maybe "" T.singleton sign
+      fracPart = maybe "" (T.cons '.') frac
       suff = maybe "" (T.cons '\'') suffix
-  return (prefix <> digits <> suff)
+  return (prefix <> digits <> fracPart <> suff)
 
 -- | Infer the grammatical case for a numeric token.
 numberCase :: Text -- ^ Numeric token.
            -> KipParser Case -- ^ Inferred case.
 numberCase token = do
   let (surface, suffix) = T.breakOn "'" token
-      base =
-        if T.isPrefixOf "-" surface then T.drop 1 surface else surface
+      base = T.filter isDigit surface
   if T.null suffix
     then do
       analyses <- upsCached base
@@ -1712,6 +1737,18 @@ parseNumberValue :: Text -- ^ Numeric token.
                  -> Integer -- ^ Parsed integer value.
 parseNumberValue token =
   let stripped = T.filter (\c -> c /= '\'' && (isDigit c || c == '-')) token
+  in read (T.unpack stripped)
+
+-- | Check whether a numeric token contains a fractional part.
+isFloatToken :: Text -- ^ Numeric token.
+             -> Bool -- ^ True when the token is a float.
+isFloatToken token = "." `T.isInfixOf` token
+
+-- | Parse a numeric token into a floating-point value.
+parseNumberValueFloat :: Text -- ^ Numeric token.
+                      -> Double -- ^ Parsed floating value.
+parseNumberValueFloat token =
+  let stripped = T.filter (\c -> c /= '\'' && (isDigit c || c == '-' || c == '.')) token
   in read (T.unpack stripped)
 
 -- | Parse a quoted string with an optional case suffix.
@@ -1758,6 +1795,11 @@ stringCaseFromSuffix suff =
 isIntType :: Identifier -- ^ Identifier to inspect.
           -> Bool -- ^ True when identifier names the integer type.
 isIntType (xs, x) = xs == [T.pack "tam"] && x == T.pack "sayı"
+
+-- | Check whether an identifier names the floating-point type.
+isFloatType :: Identifier -- ^ Identifier to inspect.
+            -> Bool -- ^ True when identifier names the floating-point type.
+isFloatType (xs, x) = xs == [T.pack "ondalık"] && x == T.pack "sayı"
 
 -- | Check whether an identifier names the string type.
 isStringType :: Identifier -- ^ Identifier to inspect.

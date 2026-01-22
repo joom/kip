@@ -1,0 +1,38 @@
+temeli yükle.
+
+(* Ondalık sayı fonksiyonları. *)
+(bu ondalık-sayıyla) (şu ondalık-sayının) (toplam ondalık-sayısı),
+  yerleşiktir.
+
+(bu ondalık-sayıyla) (şu ondalık-sayının) (çarpım ondalık-sayısı),
+  yerleşiktir.
+
+(bu ondalık-sayıyla) (şu ondalık-sayının) (fark ondalık-sayısı),
+  yerleşiktir.
+
+(bu ondalık-sayının) (şu ondalık-sayıya) (bölüm ondalık-sayısı),
+  yerleşiktir.
+
+(bu ondalık-sayıyla) (şu ondalık-sayının) (eşitlik doğruluğu),
+  yerleşiktir.
+
+(bu ondalık-sayının) (şu ondalık-sayıdan) (küçüklük doğruluğu),
+  yerleşiktir.
+
+(bu ondalık-sayının) (şu ondalık-sayıdan) (küçük-eşitlik doğruluğu),
+  yerleşiktir.
+
+(bu ondalık-sayının) (şu ondalık-sayıdan) (büyüklük doğruluğu),
+  yerleşiktir.
+
+(bu ondalık-sayıyla) (şu ondalık-sayının) (büyük-eşitlik doğruluğu),
+  yerleşiktir.
+
+(bu ondalık-sayının) (şu ondalık-sayıyla) (kalan ondalık-sayısı),
+  yerleşiktir.
+
+(bu ondalık-sayıyla) (şu ondalık-sayıya) (bölünürlük doğruluğu),
+  (bunun şunla kalanıyla) 0.0'ın eşitliğidir.
+
+(bu ondalık-sayının) (dizge-hal dizgesi),
+  yerleşiktir.

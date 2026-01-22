@@ -23,6 +23,7 @@ data-files:
     lib/temel-etki.kip
     lib/temel-liste.kip
     lib/temel-tam-sayı.kip
+    lib/temel-ondalık-sayı.kip
 
 source-repository head
   type: git

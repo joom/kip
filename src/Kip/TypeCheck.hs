@@ -270,6 +270,8 @@ tcExp1With allowEffect e =
       return (StrLit annExp lit)
     IntLit {annExp, intVal} ->
       return (IntLit annExp intVal)
+    FloatLit {annExp, floatVal} ->
+      return (FloatLit annExp floatVal)
     Bind {annExp, bindName, bindExp} -> do
       exp' <- tcExp1With allowEffect bindExp
       return (Bind annExp bindName exp')
@@ -298,6 +300,7 @@ tcExp1With allowEffect e =
                 Just ty -> [(([], T.pack "_scrutinee"), ty)]
                 Nothing -> []
             IntLit {} -> [(([], T.pack "_scrutinee"), TyInt (mkAnn Nom NoSpan))]
+            FloatLit {} -> [(([], T.pack "_scrutinee"), TyFloat (mkAnn Nom NoSpan))]
             StrLit {} -> [(([], T.pack "_scrutinee"), TyString (mkAnn Nom NoSpan))]
             _ -> []  -- Skip check for complex expressions
       clauses' <- mapM (tcClause scrutArg allowEffect) clauses
@@ -326,6 +329,8 @@ applyTypeCase cas exp =
       in Var (setAnnCase ann cas) name candidates'
     IntLit ann n ->
       IntLit (setAnnCase ann cas) n
+    FloatLit ann n ->
+      FloatLit (setAnnCase ann cas) n
     _ -> exp
 
 -- | Resolve a variable by candidates, arity, and scope.
@@ -443,6 +448,7 @@ normalizePrimTy ty =
   case ty of
     TyInd ann name
       | isIntIdent name -> TyInt ann
+      | isFloatIdent name -> TyFloat ann
       | isStringIdent name -> TyString ann
       | otherwise -> TyInd ann name
     TyApp ann ctor args ->
@@ -556,6 +562,7 @@ skolemizeTy ty =
       TyApp ann (skolemizeTy ctor) (map skolemizeTy args)
     TyInd {} -> ty
     TyInt {} -> ty
+    TyFloat {} -> ty
     TyString {} -> ty
     TySkolem {} -> ty
 
@@ -646,6 +653,7 @@ inferType :: Exp Ann -- ^ Expression to infer.
 inferType e =
   case e of
     IntLit {} -> return (Just (TyInt (mkAnn Nom NoSpan)))
+    FloatLit {} -> return (Just (TyFloat (mkAnn Nom NoSpan)))
     StrLit {} -> return (Just (TyString (mkAnn Nom NoSpan)))
     Bind {bindExp} -> inferType bindExp
     Seq {second} -> inferType second
@@ -841,6 +849,7 @@ tyMatchesRigid tyCons inferred declared =
   in case (n1, n2) of
     (TyString _, TyString _) -> True
     (TyInt _, TyInt _) -> True
+    (TyFloat _, TyFloat _) -> True
     (Arr _ d1 i1, Arr _ d2 i2) -> tyMatchesRigid tyCons d1 d2 && tyMatchesRigid tyCons i1 i2
     (TyInd _ n1', TyInd _ n2')
       | isDefinedType n2' -> identMatches n1' n2'  -- Both are defined types, check if they match
@@ -869,6 +878,7 @@ tyEq tyCons t1 t2 =
   in case (n1, n2) of
     (TyString _, TyString _) -> True
     (TyInt _, TyInt _) -> True
+    (TyFloat _, TyFloat _) -> True
     (Arr _ d1 i1, Arr _ d2 i2) -> tyEq tyCons d1 d2 && tyEq tyCons i1 i2
     (TyInd _ n1', TyInd _ n2') -> identMatches n1' n2'
     (TySkolem _ n1', TySkolem _ n2') -> n1' == n2'
@@ -892,6 +902,7 @@ normalizeTy tyCons ty =
   case ty of
     TyInd ann name
       | isIntIdent name -> TyInt ann
+      | isFloatIdent name -> TyFloat ann
       | isStringIdent name -> TyString ann
       | otherwise -> TyInd ann name
     TySkolem ann name ->
@@ -918,6 +929,11 @@ identMatches (xs1, x1) (xs2, x2) =
 isIntIdent :: Identifier -- ^ Identifier to inspect.
            -> Bool -- ^ True when identifier matches integer type.
 isIntIdent (mods, name) = mods == [T.pack "tam"] && name == T.pack "sayı"
+
+-- | Check for the floating-point type identifier.
+isFloatIdent :: Identifier -- ^ Identifier to inspect.
+             -> Bool -- ^ True when identifier matches floating-point type.
+isFloatIdent (mods, name) = mods == [T.pack "ondalık"] && name == T.pack "sayı"
 
 -- | Check for the string type identifier.
 isStringIdent :: Identifier -- ^ Identifier to inspect.
@@ -950,6 +966,10 @@ unifyTypes tyCons expected actual =
         TyInt _ ->
           case a of
             TyInt _ -> Just subst
+            _ -> Nothing
+        TyFloat _ ->
+          case a of
+            TyFloat _ -> Just subst
             _ -> Nothing
         TyVar _ name ->
           case lookup name subst of
@@ -999,6 +1019,8 @@ applySubst subst ty =
         Just t -> t
         Nothing -> TyVar ann name
     TySkolem {} -> ty
+    TyInt {} -> ty
+    TyFloat {} -> ty
     TyInd {} -> ty
     TyString {} -> ty
     Arr ann d i -> Arr ann (applySubst subst d) (applySubst subst i)
