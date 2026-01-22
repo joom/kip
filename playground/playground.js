@@ -60,31 +60,192 @@ function escapeHtml(text) {
 }
 
 function highlightNonString(text) {
-  const tokenPattern = /\p{L}[\p{L}\p{N}]*|\d+|[()]/gu;
-  let result = "";
-  let lastIndex = 0;
+  const tokenPattern = /\d+(?:'?\p{L}+)?|\p{L}+(?:-\p{L}+)*|[(),.]/gu;
+  const tokens = [];
   let match;
 
   while ((match = tokenPattern.exec(text)) !== null) {
     const token = match[0];
-    const start = match.index;
-    const end = start + token.length;
+    const kind =
+      token === "(" || token === ")"
+        ? "paren"
+        : token === ","
+          ? "comma"
+          : token === "."
+            ? "period"
+            : /^\d/.test(token)
+              ? "number"
+              : "word";
+    tokens.push({
+      token,
+      kind,
+      start: match.index,
+      end: match.index + token.length,
+    });
+  }
+
+  const typeWordIndices = new Set();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].kind !== "word" || tokens[i].token !== "Bir") {
+      continue;
+    }
+    for (let j = i + 1; j < tokens.length; j += 1) {
+      if (tokens[j].kind === "word" && tokens[j].token === "ya") {
+        for (let k = i + 1; k < j; k += 1) {
+          if (tokens[k].kind === "word") {
+            typeWordIndices.add(k);
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    if (
+      tokens[i].kind === "word" &&
+      tokens[i].token === "ya" &&
+      tokens[i + 1].kind === "word" &&
+      tokens[i + 1].token === "bir"
+    ) {
+      for (let j = i + 2; j < tokens.length; j += 1) {
+        if (tokens[j].kind === "word" && tokens[j].token === "ya") {
+          for (let k = i + 2; k < j; k += 1) {
+            if (tokens[k].kind === "word") {
+              typeWordIndices.add(k);
+            }
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].kind !== "word" || tokens[i].token !== "ya") {
+      continue;
+    }
+    let start = i + 1;
+    if (
+      start < tokens.length &&
+      tokens[start].kind === "word" &&
+      tokens[start].token === "da"
+    ) {
+      start += 1;
+    }
+    let endIndex = -1;
+    for (let j = start; j < tokens.length; j += 1) {
+      if (tokens[j].kind !== "word") {
+        continue;
+      }
+      if (tokens[j].token === "ya" || tokens[j].token === "olabilir") {
+        endIndex = j;
+        break;
+      }
+    }
+    if (endIndex === -1 || start >= endIndex) {
+      continue;
+    }
+    const wordIndices = [];
+    for (let j = start; j < endIndex; j += 1) {
+      if (tokens[j].kind === "word") {
+        wordIndices.push(j);
+      }
+    }
+    if (wordIndices.length < 2) {
+      continue;
+    }
+    const lastWordIndex = wordIndices[wordIndices.length - 1];
+    for (const index of wordIndices) {
+      if (index !== lastWordIndex) {
+        typeWordIndices.add(index);
+      }
+    }
+  }
+
+  let defStart = 0;
+  for (let i = 0; i <= tokens.length; i += 1) {
+    if (i < tokens.length && tokens[i].kind !== "period") {
+      continue;
+    }
+    let commaIndex = -1;
+    for (let j = defStart; j < i; j += 1) {
+      if (tokens[j].kind === "comma") {
+        commaIndex = j;
+        break;
+      }
+    }
+    const parenStack = [];
+    let seenTopLevelToken = false;
+    for (let j = defStart; j < i; j += 1) {
+      const token = tokens[j];
+      if (token.kind === "paren") {
+        if (token.token === "(") {
+          const eligible =
+            commaIndex !== -1 &&
+            j < commaIndex &&
+            !seenTopLevelToken;
+          parenStack.push({
+            eligible,
+            wordIndices: [],
+            hasNumber: false,
+          });
+        } else if (parenStack.length) {
+          const top = parenStack.pop();
+          if (top.eligible && !top.hasNumber && top.wordIndices.length > 1) {
+            for (let k = 1; k < top.wordIndices.length; k += 1) {
+              typeWordIndices.add(top.wordIndices[k]);
+            }
+          }
+        }
+        continue;
+      }
+      if (!parenStack.length) {
+        if (token.kind === "word" || token.kind === "number") {
+          seenTopLevelToken = true;
+        }
+        continue;
+      }
+      const top = parenStack[parenStack.length - 1];
+      if (!top.eligible) {
+        continue;
+      }
+      if (token.kind === "number") {
+        top.hasNumber = true;
+        continue;
+      }
+      if (token.kind === "word") {
+        top.wordIndices.push(j);
+      }
+    }
+    defStart = i + 1;
+  }
+
+  let result = "";
+  let lastIndex = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    const { start, end } = token;
     result += escapeHtml(text.slice(lastIndex, start));
 
-    if (token === "(" || token === ")") {
-      result += `<span class="kip-paren">${token}</span>`;
-    } else if (/^\d+$/.test(token)) {
+    if (token.kind === "paren") {
+      result += `<span class="kip-paren">${token.token}</span>`;
+    } else if (token.kind === "number") {
       const prev = start > 0 ? text[start - 1] : "";
-      const next = end < text.length ? text[end] : "";
-      if ((prev && letterPattern.test(prev)) || (next && letterPattern.test(next))) {
-        result += escapeHtml(token);
+      if (prev && letterPattern.test(prev)) {
+        result += escapeHtml(token.token);
       } else {
-        result += `<span class="kip-literal">${token}</span>`;
+        result += `<span class="kip-literal">${escapeHtml(token.token)}</span>`;
       }
-    } else if (keywordSet.has(token)) {
-      result += `<span class="kip-keyword">${escapeHtml(token)}</span>`;
+    } else if (token.kind === "comma" || token.kind === "period") {
+      result += `<span class="kip-keyword">${escapeHtml(token.token)}</span>`;
+    } else if (token.kind === "word" && keywordSet.has(token.token)) {
+      result += `<span class="kip-keyword">${escapeHtml(token.token)}</span>`;
+    } else if (token.kind === "word" && typeWordIndices.has(i)) {
+      result += `<span class="kip-type">${escapeHtml(token.token)}</span>`;
     } else {
-      result += escapeHtml(token);
+      result += escapeHtml(token.token);
     }
 
     lastIndex = end;
@@ -147,9 +308,14 @@ function highlightKeywords(text) {
         }
         j += 1;
       }
-      const literal = text.slice(i, j);
+      let end = j;
+      const suffixMatch = text.slice(end).match(/^'?\p{L}+/u);
+      if (suffixMatch) {
+        end += suffixMatch[0].length;
+      }
+      const literal = text.slice(i, end);
       result += `<span class="kip-literal">${escapeHtml(literal)}</span>`;
-      i = j;
+      i = end;
       lastIndex = i;
       continue;
     }

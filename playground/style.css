@@ -9,10 +9,10 @@
   --text: #e5e7eb;
   --muted: rgba(226, 232, 240, 0.75);
 
-  --accent1: #20d6c7; /* teal */
-  --accent2: #1a63ff; /* blue */
-  --accent3: #ff8a2a; /* orange */
-  --accent4: #f2d35e; /* gold */
+  --accent1: #20d6c7;
+  --accent2: #1a63ff;
+  --accent3: #ff77dc;
+  --accent4: #f9f871;
 
   --shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
   --radius: 14px;
@@ -169,6 +169,10 @@ code {
   color: transparent;
 }
 
+.bold {
+  font-weight: 900;
+}
+
 .hero-subtitle {
   margin: 0 0 1.2rem;
   font-size: 1.05rem;
@@ -293,16 +297,21 @@ a.badge:hover {
 
 .kip-paren {
   color: var(--accent1);
-  font-weight: 700;
+  font-weight: 900;
 }
 
 .kip-literal {
   color: var(--accent4);
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .kip-comment {
   color: rgba(226, 232, 240, 0.55);
+}
+
+.kip-type {
+  color: var(--accent3);
+  font-weight: 500;
 }
 
 /* Sections */
