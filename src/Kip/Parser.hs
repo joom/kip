@@ -1242,7 +1242,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
             case candidates of
               (ident, _):_ -> ident
               [] -> rawIdent
-      MkParserState{parserPrimTypes, parserTyCons, parserTyParams} <- getP
+      MkParserState{parserPrimTypes, parserTyCons} <- getP
       let tyNames = map fst parserTyCons
       case candidates of
         (ident, _):_
@@ -1250,7 +1250,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
         (ident, _):_
           | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann)
         _ ->
-          if nameForTy `elem` tyNames || nameForTy `elem` parserTyParams
+          if nameForTy `elem` tyNames
             then return (TyInd ann nameForTy)
             else return (TyVar ann nameForTy)
     -- | Parse a value definition.
@@ -1415,15 +1415,13 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
                        -> KipParser (Ty Ann) -- ^ Parsed type.
     typeFromIdentLoose rawIdent sp = do
       (name, cas) <- resolveTypeCandidateLoose rawIdent
-      MkParserState{parserTyParams, parserPrimTypes} <- getP
+      MkParserState{parserPrimTypes} <- getP
       let ann = mkAnn cas sp
       if name `elem` parserPrimTypes && isIntType name
         then return (TyInt ann)
         else if name `elem` parserPrimTypes && isStringType name
           then return (TyString ann)
-          else if name `elem` parserTyParams
-            then return (TyVar ann name)
-            else return (TyInd ann name)
+          else return (TyVar ann name)
     -- | Parse a function body without explicit clauses.
     parseBodyOnly :: KipParser [Clause Ann] -- ^ Parsed clauses.
     parseBodyOnly = do

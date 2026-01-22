@@ -1097,6 +1097,7 @@ main = do
             TyInt ann -> TyInt (setAnnCase ann Nom)
             TyInd ann name -> TyInd (setAnnCase ann Nom) name
             TyVar ann name -> TyVar (setAnnCase ann Nom) name
+            TySkolem ann name -> TySkolem (setAnnCase ann Nom) name
             Arr ann d i -> Arr (setAnnCase ann Nom) (normalizeTyNom d) (normalizeTyNom i)
             TyApp ann ctor args -> TyApp (setAnnCase ann Nom) (normalizeTyNom ctor) (map normalizeTyNom args)
 

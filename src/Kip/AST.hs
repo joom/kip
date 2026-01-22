@@ -93,6 +93,7 @@ data Ty a =
   | Arr      { annTy :: a , dom :: Ty a, img :: Ty a } -- ^ Function type.
   | TyInd    { annTy :: a , indName :: Identifier } -- ^ Named type.
   | TyVar    { annTy :: a , tyVarName :: Identifier } -- ^ Type variable.
+  | TySkolem { annTy :: a , tySkolemName :: Identifier } -- ^ Rigid (skolem) type variable.
   | TyApp    { annTy :: a , tyCtor :: Ty a , tyArgs :: [Ty a] } -- ^ Type application.
   deriving (Show, Eq, Ord, Generic, Functor, Binary)
 

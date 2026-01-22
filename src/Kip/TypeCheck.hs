@@ -32,10 +32,31 @@
 -- | The combination of case-aware reordering plus arity/type filtering makes
 -- | overload resolution deterministic: there is either a unique applicable
 -- | overload or a precise error describing why none match.
+-- |
+-- | Skolemization and rigid type variables:
+-- |
+-- |   * Unknown type identifiers in type annotations are parsed as 'TyVar'.
+-- |     These are treated as universally quantified placeholders, not concrete
+-- |     types. For example, @sayı@ in a signature is a type variable, not the
+-- |     primitive @tam-sayı@ type.
+-- |   * When type-checking a function body, argument types are skolemized
+-- |     ('TyVar' -> 'TySkolem') before they are added to 'tcVarTys' and
+-- |     'tcFuncSigs'. This makes them rigid inside the body: they cannot unify
+-- |     with concrete types like @tam-sayı@ unless the variable is instantiated
+-- |     by an explicit type application at the call site.
+-- |   * Unification and type equality treat skolems as only matching themselves
+-- |     (or a flexible 'TyVar'), preventing accidental inference from
+-- |     collapsing a parametric type into a primitive.
+-- |
+-- | In effect, the checker separates “unknown but fixed” types (skolems inside
+-- | a definition) from “unknown and flexible” types (type variables at use
+-- | sites), which removes the @sayı@ vs @tam-sayı@ ambiguity without blocking
+-- | legitimate polymorphic uses.
 module Kip.TypeCheck where
 
 import GHC.Generics (Generic)
 import Data.Binary (Binary, Get)
+import qualified Data.Bifunctor as Bifunctor
 import qualified Data.Binary as B
 import Data.Word (Word8)
 import Kip.AST
@@ -189,7 +210,8 @@ tcExp1With allowEffect e =
                       -- Check if we're trying to apply a type variable as a function (parametric polymorphism violation)
                       MkTCState{tcVarTys} <- get
                       case lookupByCandidates tcVarTys varCandidates of
-                        Just (TyVar _ _) -> lift (throwE (NoType (annSpan annApp)))
+                        Just TyVar {} -> lift (throwE (NoType (annSpan annApp)))
+                        Just TySkolem {} -> lift (throwE (NoType (annSpan annApp)))
                         _ -> return (App annApp fn' args')
                 else do
                   argTys <- mapM inferType args'
@@ -418,12 +440,16 @@ normalizePrimTy ty =
       TyApp ann (normalizePrimTy ctor) (map normalizePrimTy args)
     Arr ann d i ->
       Arr ann (normalizePrimTy d) (normalizePrimTy i)
+    TySkolem ann name ->
+      TySkolem ann name
     _ -> ty
   where
     -- | Check for the integer type identifier.
     isIntIdent :: Identifier -- ^ Identifier to inspect.
                -> Bool -- ^ True when identifier matches integer type.
-    isIntIdent (mods, name) = name == T.pack "sayı" && (mods == [T.pack "tam"] || null mods)
+    isIntIdent (mods, name) =
+      (mods == [T.pack "tam"] && name == T.pack "sayı") ||
+      (null mods && name == T.pack "tam-sayı")
     -- | Check for the string type identifier.
     isStringIdent :: Identifier -- ^ Identifier to inspect.
                   -> Bool -- ^ True when identifier matches string type.
@@ -458,8 +484,9 @@ tcStmt stmt =
       return (Defn name ty e')
     Function name args ty body isGerund -> do
       let argNames = map fst args
-      mRet <- withCtx (name : argNames) (withVarTypes args (inferReturnType body))
-      body' <- withCtx (name : argNames) (withFuncRet name (map snd args) mRet (withFuncSig name args (mapM (tcClause args isGerund) body)))
+          skolemArgs = map (Bifunctor.second skolemizeTy) args
+      mRet <- withCtx (name : argNames) (withVarTypes skolemArgs (inferReturnType body))
+      body' <- withCtx (name : argNames) (withFuncRet name (map snd skolemArgs) mRet (withFuncSig name skolemArgs (mapM (tcClause skolemArgs isGerund) body)))
       -- Check that the inferred return type matches the declared type with rigid type variables
       -- Only apply this check if the declared type contains type variables (polymorphism)
       -- AND the type annotation is explicit (not the default TyString)
@@ -519,6 +546,20 @@ tcStmt stmt =
     ExpStmt e -> do
       e' <- tcExp1With True e
       return (ExpStmt e')
+
+-- | Replace universally quantified type variables with skolems for rigid checking.
+skolemizeTy :: Ty Ann -- ^ Type to skolemize.
+            -> Ty Ann -- ^ Skolemized type.
+skolemizeTy ty =
+  case ty of
+    TyVar ann name -> TySkolem ann name
+    Arr ann d i -> Arr ann (skolemizeTy d) (skolemizeTy i)
+    TyApp ann ctor args ->
+      TyApp ann (skolemizeTy ctor) (map skolemizeTy args)
+    TyInd {} -> ty
+    TyInt {} -> ty
+    TyString {} -> ty
+    TySkolem {} -> ty
 
 -- | Reorder values to match expected grammatical cases.
 reorderByCases :: forall a.
@@ -781,6 +822,7 @@ containsTyVars :: [(Identifier, Int)] -- ^ Type constructor arities (defined typ
 containsTyVars tyCons ty =
   case ty of
     TyVar {} -> True
+    TySkolem {} -> True
     TyInd _ name -> name `notElem` map fst tyCons  -- Undefined type = type variable
     Arr _ d i -> containsTyVars tyCons d || containsTyVars tyCons i
     TyApp _ c args -> containsTyVars tyCons c || any (containsTyVars tyCons) args
@@ -806,9 +848,14 @@ tyMatchesRigid tyCons inferred declared =
       | isDefinedType n2' -> identMatches n1' n2'  -- Both are defined types, check if they match
       | otherwise -> n1' == n2'  -- n2' is undefined (type variable), must match exactly
     (_, TyInd _ n2') | not (isDefinedType n2') -> False  -- Concrete type cannot match rigid type variable
+    (TySkolem _ n1', TySkolem _ n2') -> n1' == n2'
+    (TySkolem _ n1', TyVar _ n2') -> n1' == n2'
+    (TyVar _ n1', TySkolem _ n2') -> n1' == n2'
     (TyVar _ n1', TyVar _ n2') -> n1' == n2'  -- Type variables must match exactly
     (_, TyVar _ _) -> False  -- Concrete types cannot match rigid type variables
     (TyVar _ _, _) -> True  -- Flexible type variables in inferred type can match anything
+    (_, TySkolem {}) -> False
+    (TySkolem {}, _) -> False
     (TyApp _ c1 as1, TyApp _ c2 as2) ->
       tyMatchesRigid tyCons c1 c2 && length as1 == length as2 && and (zipWith (tyMatchesRigid tyCons) as1 as2)
     _ -> False
@@ -826,6 +873,11 @@ tyEq tyCons t1 t2 =
     (TyInt _, TyInt _) -> True
     (Arr _ d1 i1, Arr _ d2 i2) -> tyEq tyCons d1 d2 && tyEq tyCons i1 i2
     (TyInd _ n1', TyInd _ n2') -> identMatches n1' n2'
+    (TySkolem _ n1', TySkolem _ n2') -> n1' == n2'
+    (TySkolem {}, TyVar {}) -> True
+    (TyVar {}, TySkolem {}) -> True
+    (TySkolem {}, _) -> False
+    (_, TySkolem {}) -> False
     (TyVar {}, Arr {}) -> False  -- Type variables cannot match function types
     (Arr {}, TyVar {}) -> False  -- Type variables cannot match function types
     (TyVar _ _, _) -> True
@@ -844,6 +896,8 @@ normalizeTy tyCons ty =
       | isIntIdent name -> TyInt ann
       | isStringIdent name -> TyString ann
       | otherwise -> TyInd ann name
+    TySkolem ann name ->
+      TySkolem ann name
     TyApp ann (TyInd _ name) args ->
       case lookup name tyCons of
         Just arity | arity > 0 ->
@@ -855,7 +909,9 @@ normalizeTy tyCons ty =
       Arr ann (normalizeTy tyCons d) (normalizeTy tyCons i)
     _ -> ty
   where
-    isIntIdent (mods, name) = null mods && name == T.pack "tam-sayı"
+    isIntIdent (mods, name) =
+      (mods == [T.pack "tam"] && name == T.pack "sayı") ||
+      (null mods && name == T.pack "tam-sayı")
     isStringIdent (mods, name) = null mods && name == T.pack "dizge"
 
 -- | Compare identifiers, allowing missing namespaces.
@@ -902,6 +958,11 @@ unifyTypes tyCons expected actual =
               case a of
                 Arr {} -> Nothing  -- Type variables cannot unify with function types
                 _ -> Just ((name, a) : subst)
+        TySkolem _ name ->
+          case a of
+            TySkolem _ name' | name == name' -> Just subst
+            TyVar {} -> Just subst
+            _ -> Nothing
         TyInd _ n1 ->
           case a of
             TyInd _ n2 | n1 == n2 -> Just subst
@@ -934,6 +995,7 @@ applySubst subst ty =
       case lookup name subst of
         Just t -> t
         Nothing -> TyVar ann name
+    TySkolem {} -> ty
     TyInd {} -> ty
     TyString {} -> ty
     Arr ann d i -> Arr ann (applySubst subst d) (applySubst subst i)

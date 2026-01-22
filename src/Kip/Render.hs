@@ -418,6 +418,8 @@ renderTy cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm (applyTyMods tyMods name) (annCase ann)
     TyVar ann name ->
       renderIdentWithCase cache fsm name (annCase ann)
+    TySkolem ann name ->
+      renderIdentWithCase cache fsm name (annCase ann)
     TyApp ann (TyInd _ name) [argTy] -> do
       argStr <- renderTy cache fsm paramTyCons tyMods argTy
       let nameCases =
@@ -449,6 +451,8 @@ renderTyNom cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm (applyTyMods tyMods name) Nom
     TyVar _ name ->
       renderIdentWithCase cache fsm name Nom
+    TySkolem _ name ->
+      renderIdentWithCase cache fsm name Nom
     TyApp _ (TyInd _ name) [argTy] -> do
       argStr <- renderTyNom cache fsm paramTyCons tyMods argTy
       let nameCases = if name `elem` paramTyCons then [P3s] else [Nom]
@@ -476,6 +480,9 @@ renderTyParts cache fsm paramTyCons tyMods ty =
       s <- renderIdentWithCase cache fsm (applyTyMods tyMods name) (annCase ann)
       return [(s, False)]
     TyVar ann name -> do
+      s <- renderIdentWithCase cache fsm name (annCase ann)
+      return [(s, True)]
+    TySkolem ann name -> do
       s <- renderIdentWithCase cache fsm name (annCase ann)
       return [(s, True)]
     TyApp ann (TyInd _ name) [argTy] -> do
@@ -572,6 +579,7 @@ normalizeSigArgs args =
       case ty of
         TyInd ann _ -> annCase ann == Loc
         TyVar ann _ -> annCase ann == Loc
+        TySkolem ann _ -> annCase ann == Loc
         TyApp ann _ _ -> annCase ann == Loc
         TyInt ann -> annCase ann == Loc
         TyString ann -> annCase ann == Loc
@@ -582,6 +590,7 @@ normalizeSigArgs args =
       case ty of
         TyInd ann name -> TyInd (setAnnCase ann Gen) name
         TyVar ann name -> TyVar (setAnnCase ann Gen) name
+        TySkolem ann name -> TySkolem (setAnnCase ann Gen) name
         TyInt ann -> TyInt (setAnnCase ann Gen)
         TyString ann -> TyString (setAnnCase ann Gen)
         Arr ann d i -> Arr (setAnnCase ann Gen) (forceGen d) (forceGen i)

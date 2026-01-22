@@ -348,10 +348,12 @@ typeMatchesAllowUnknown tyCons mTy ty =
     Nothing ->
       case ty of
         TyVar {} -> True
+        TySkolem {} -> False
         _ -> False
     Just t ->
       case ty of
         TyVar {} -> True
+        TySkolem {} -> tyEq tyCons t ty
         _ -> typeMatches tyCons (Just t) ty
 
 -- | Lookup a binding by candidate identifiers.
@@ -480,6 +482,11 @@ tyEq tyCons t1 t2 =
     (TyInt _, TyInt _) -> True
     (Arr _ d1 i1, Arr _ d2 i2) -> tyEq tyCons d1 d2 && tyEq tyCons i1 i2
     (TyInd _ n1', TyInd _ n2') -> identMatches n1' n2'
+    (TySkolem _ n1', TySkolem _ n2') -> n1' == n2'
+    (TySkolem {}, TyVar {}) -> True
+    (TyVar {}, TySkolem {}) -> True
+    (TySkolem {}, _) -> False
+    (_, TySkolem {}) -> False
     (TyVar _ _, _) -> True
     (_, TyVar _ _) -> True
     (TyApp _ c1 as1, TyApp _ c2 as2) ->
@@ -493,6 +500,7 @@ normalizeTy :: [(Identifier, Int)] -- ^ Type constructor arities.
 normalizeTy tyCons ty =
   case ty of
     TyInt {} -> ty
+    TySkolem {} -> ty
     TyApp ann (TyInd _ name) args ->
       case lookup name tyCons of
         Just arity | arity > 0 -> TyApp ann (TyInd (mkAnn Nom NoSpan) name) (map (normalizeTy tyCons) args)
@@ -544,6 +552,11 @@ unifyTypes tyCons expected actual =
                 then Just subst
                 else Nothing
             Nothing -> Just ((name, a) : subst)
+        TySkolem _ name ->
+          case a of
+            TySkolem _ name' | name == name' -> Just subst
+            TyVar {} -> Just subst
+            _ -> Nothing
         TyInd _ n1 ->
           case a of
             TyInd _ n2 | n1 == n2 -> Just subst
@@ -576,6 +589,7 @@ applySubst subst ty =
       case lookup name subst of
         Just t -> t
         Nothing -> TyVar ann name
+    TySkolem {} -> ty
     TyInd {} -> ty
     TyString {} -> ty
     Arr ann d i -> Arr ann (applySubst subst d) (applySubst subst i)
