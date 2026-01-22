@@ -1,0 +1,5 @@
+(bu sayının) tekliği,
+  (bunun 0'la eşitliği) doğruysa, yanlış,
+  değilse,
+    ((bunun 1'le eşitliği) doğruysa, doğru,
+     değilse, (bunla 2'nin farkının) tekliğidir).
