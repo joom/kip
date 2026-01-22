@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Non-interactive runner for Kip (playground/WASM).
 module Main where
@@ -28,14 +27,14 @@ import Kip.Eval hiding (Unknown)
 import Kip.Parser
 import Kip.Render
 import Kip.Runner
-import Kip.Transpile.JS (transpileProgram)
+import Kip.Codegen.JS (codegenProgram)
 import Kip.TypeCheck
 
 -- | Supported CLI modes.
 data CliMode
   = ModeExec
   | ModeBuild
-  | ModeEmitJs
+  | ModeCodegen Text
   deriving (Eq, Show)
 
 -- | Parsed CLI options.
@@ -79,12 +78,16 @@ main = do
         runReaderT (loadPreludeState (optNoPrelude opts) buildModuleDirs renderCache fsm upsCache downsCache) renderCtx
       _ <- runReaderT (runFiles False False True preludeBuildPst preludeBuildTC preludeBuildEval buildModuleDirs preludeBuildLoaded buildTargets) renderCtx
       exitSuccess
-    ModeEmitJs -> do
+    ModeCodegen target -> do
       when (null (optFiles opts)) $
         die . T.unpack =<< runReaderT (renderMsg MsgNeedFile) renderCtx
-      js <- runReaderT (emitJsFilesWithDeps moduleDirs preludePst preludeTC Set.empty (optFiles opts)) renderCtx
-      TIO.putStrLn js
-      exitSuccess
+      case target of
+        "js" -> do
+          js <- runReaderT (emitJsFilesWithDeps moduleDirs preludePst preludeTC Set.empty (optFiles opts)) renderCtx
+          TIO.putStrLn js
+          exitSuccess
+        _ ->
+          die ("Unknown codegen target: " ++ T.unpack target)
   where
     cliParser :: Parser CliOptions
     cliParser =
@@ -115,7 +118,11 @@ main = do
     modeParser =
       flag' ModeExec (long "exec" <> help "Run files and exit")
         <|> flag' ModeBuild (long "build" <> help "Build cache files for the given files or directories")
-        <|> flag' ModeEmitJs (long "emit-js" <> help "Emit JavaScript for the given files")
+        <|> (ModeCodegen . T.pack <$> strOption
+              ( long "codegen"
+              <> metavar "TARGET"
+              <> help "Codegen target for the given files (e.g. js)"
+              ))
         <|> pure ModeExec
 
     locateTrmorph :: Lang -> IO FilePath
@@ -151,7 +158,7 @@ main = do
         p:_ -> return p
         [] -> return cabalPath
 
--- | Transpile files into a single JS-like output, including all dependencies.
+-- | Generate a single JS-like output for files and dependencies.
 emitJsFilesWithDeps :: [FilePath] -> ParserState -> TCState -> Set FilePath -> [FilePath] -> RenderM Text
 emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files = do
   -- First load the prelude entry point to get all library definitions
@@ -159,9 +166,9 @@ emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files = do
   (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs ([], basePst, baseTC, Set.empty) preludePath
   -- Then load the user files
   (stmts, _, _, _) <- foldM' (emitJsFileWithDeps moduleDirs) (preludeStmts, pst', tcSt', loaded') files
-  return (transpileProgram stmts)
+  return (codegenProgram stmts)
 
--- | Transpile a single file and its dependencies.
+-- | Generate a single file and its dependencies.
 emitJsFileWithDeps :: [FilePath] -> ([Stmt Ann], ParserState, TCState, Set FilePath) -> FilePath -> RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
 emitJsFileWithDeps moduleDirs (acc, pst, tcSt, loaded) path = do
   exists <- liftIO (doesFileExist path)
@@ -204,7 +211,7 @@ isLoadStmt :: Stmt Ann -> Bool
 isLoadStmt (Load _) = True
 isLoadStmt _ = False
 
--- | Load a dependency for JS transpilation.
+-- | Load a dependency for JS code generation.
 emitJsLoad :: [FilePath] -> [Identifier] -> [(Identifier, [Identifier])] -> ([Stmt Ann], ParserState, TCState, Set FilePath) -> Identifier -> RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
 emitJsLoad moduleDirs _paramTyCons _tyMods (acc, pst, tcSt, loaded) name = do
   path <- resolveModulePath moduleDirs name

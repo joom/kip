@@ -493,9 +493,9 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
                   msg <- renderMsg (MsgTCError tcErr (Just source) paramTyCons (parserTyMods pst'))
                   liftIO (die (T.unpack msg))
                 Right (_, tcStWithDecls) -> do
-                  let startState = (pst', tcStWithDecls, evalSt, Set.insert absPath loaded)
-                  (pstFinal, tcSt', evalSt', loaded') <-
-                    foldM' (runStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) startState stmts
+                  let startState = (pst', tcStWithDecls, evalSt, Set.insert absPath loaded, [])
+                  (pstFinal, tcSt', evalSt', loaded', typedStmts) <-
+                    foldM' (runStmtCollect showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) startState stmts
                   let depStmts = [name | Load name <- stmts]
                   depPaths <- mapM (resolveModulePath moduleDirs) depStmts
                   depHashes <- liftIO $ mapM (\p -> do
@@ -526,6 +526,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
                           cachedModule = CachedModule
                             { metadata = meta
                             , cachedStmts = stmts
+                            , cachedTypedStmts = typedStmts
                             , cachedParser = toCachedParserState pstFinal
                             , cachedTC = toCachedTCState tcSt'
                             , cachedEval = toCachedEvalState evalSt'
@@ -569,6 +570,43 @@ runStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods pr
                   msg <- renderMsg (MsgEvalError evalErr)
                   liftIO (die (T.unpack msg))
                 Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded)
+
+-- | Run a single statement while collecting type-checked statements for caching.
+runStmtCollect :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann]) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann])
+runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded, typedAcc) stmt =
+  case stmt of
+    Load name -> do
+      path <- resolveModulePath moduleDirs name
+      absPath <- liftIO (canonicalizePath path)
+      if Set.member absPath loaded
+        then return (pst, tcSt, evalSt, loaded, typedAcc ++ [stmt])
+        else do
+          (pst', tcSt', evalSt', loaded') <- runFile False False buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path
+          when showLoad $ return ()
+          return (pst', tcSt', evalSt', loaded', typedAcc ++ [stmt])
+    _ ->
+      liftIO (runTCM (tcStmt stmt) tcSt) >>= \case
+        Left tcErr -> do
+          msg <- renderMsg (MsgTCError tcErr (Just source) paramTyCons tyMods)
+          liftIO (die (T.unpack msg))
+        Right (stmt', tcSt') -> do
+          when showDefn $ return ()
+          if buildOnly
+            then
+              case stmt' of
+                ExpStmt _ -> return (pst, tcSt', evalSt, loaded, typedAcc ++ [stmt'])
+                _ ->
+                  liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt') evalSt) >>= \case
+                    Left evalErr -> do
+                      msg <- renderMsg (MsgEvalError evalErr)
+                      liftIO (die (T.unpack msg))
+                    Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'])
+            else
+              liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt') evalSt) >>= \case
+                Left evalErr -> do
+                  msg <- renderMsg (MsgEvalError evalErr)
+                  liftIO (die (T.unpack msg))
+                Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'])
 
 -- | Collect non-gerund primitive references from statements.
 collectNonGerundRefs :: [Stmt Ann] -> [Identifier]

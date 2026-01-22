@@ -1,27 +1,58 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NamedFieldPuns #-}
--- | JavaScript-ish transpiler for Kip AST.
-module Kip.Transpile.JS
-  ( transpileProgram
-  , transpileStmts
-  , transpileStmt
-  , transpileExp
+-- | JavaScript-ish code generator for Kip AST.
+module Kip.Codegen.JS
+  ( codegenProgram
+  , codegenStmts
+  , codegenStmt
+  , codegenExp
   ) where
 
 import Data.Char (isLetter)
-import Data.List (intercalate)
+import Data.List (intercalate, partition)
 import Data.Text (Text)
 import qualified Data.Text as T
 
 import Kip.AST
 
--- | Transpile a list of statements into a JS-like program.
--- Order: primitives, then overload wrappers (which capture hoisted functions),
--- then all statements.
-transpileProgram :: [Stmt Ann] -> Text
-transpileProgram stmts =
-  T.intercalate "\n\n"
-    (jsPrimitives : jsOverloadWrappers : map transpileStmt stmts)
+-- | Codegen a list of statements into a JS-like program.
+-- Order: primitives, then async IIFE containing:
+--   - function definitions (hoisted)
+--   - overload wrappers (capture hoisted functions)
+--   - expression statements (executed)
+codegenProgram :: [Stmt Ann] -> Text
+codegenProgram stmts =
+  let -- Separate function definitions from other statements
+      (funcDefs, otherStmts) = partition isFunctionDef stmts
+      -- Function definitions first (they hoist anyway)
+      funcCode = T.intercalate "\n\n" (map codegenStmt funcDefs)
+      -- Expression statements last
+      exprCode = T.intercalate "\n\n" (map codegenStmt otherStmts)
+      -- All user code inside async IIFE with wrappers after functions
+      wrapped = T.unlines
+        [ "const __kip_run = async () => {"
+        , funcCode
+        , ""
+        , jsOverloadWrappers
+        , ""
+        , exprCode
+        , "};"
+        , "await __kip_run();"
+        , "__kip_close_stdin();"
+        ]
+  in jsPrimitives <> "\n\n" <> wrapped
+
+-- | Check if a statement is a function definition (including types).
+isFunctionDef :: Stmt Ann -> Bool
+isFunctionDef stmt =
+  case stmt of
+    Function {} -> True
+    Defn {} -> True
+    NewType {} -> True
+    PrimFunc {} -> True
+    PrimType {} -> True
+    Load {} -> True
+    ExpStmt {} -> False
 
 -- | JavaScript implementations of Kip primitives.
 -- Uses 'var' so user code can override with 'const'.
@@ -29,25 +60,75 @@ transpileProgram stmts =
 -- so we use a helper to get the correct constructor format at runtime.
 -- Primitives that have library overloads (ters, birleşim, uzunluk, toplam)
 -- are stored with __kip_ prefix and wrapped at the end.
+-- The code is async-capable to support interactive browser I/O.
 jsPrimitives :: Text
 jsPrimitives = T.unlines
-  [ "// Kip → JavaScript (readability-focused output)"
+  [ "// Kip → JavaScript (async/await for interactive browser support)"
   , ""
   , "// Node.js modules for I/O (lazy loaded)"
   , "var __kip_fs = null;"
   , "var __kip_readline = null;"
-  , "var __kip_stdin_lines = null;"
-  , "var __kip_stdin_index = 0;"
+  , "var __kip_stdin_queue = [];"
+  , "var __kip_stdin_waiters = [];"
+  , "var __kip_stdin_closed = false;"
+  , "var __kip_stdin_mode = null;"
+  , "var __kip_is_browser = (typeof window !== 'undefined');"
+  , "var __kip_require = null;"
+  , "if (!__kip_is_browser && typeof process !== 'undefined' && process.versions && process.versions.node) {"
+  , "  const { createRequire } = await import('module');"
+  , "  __kip_require = createRequire(import.meta.url);"
+  , "}"
+  , "if (__kip_is_browser) {"
+  , "  if (typeof window.__kip_write !== 'function') {"
+  , "    window.__kip_write = (x) => console.log(x);"
+  , "  }"
+  , "  if (typeof window.__kip_read_line !== 'function') {"
+  , "    window.__kip_read_line = async () => {"
+  , "      var v = prompt('Input:');"
+  , "      return v === null ? '' : v;"
+  , "    };"
+  , "  }"
+  , "}"
   , ""
-  , "// Initialize stdin buffer for line-by-line reading"
+  , "// Initialize stdin buffer for line-by-line reading (Node.js only)"
   , "var __kip_init_stdin = () => {"
-  , "  if (__kip_stdin_lines === null) {"
-  , "    __kip_fs = __kip_fs || require('fs');"
+  , "  if (typeof process === 'undefined' || !process.stdin) return;"
+  , "  if (__kip_stdin_mode !== null) return;"
+  , "  if (!__kip_require) return;"
+  , "  if (process.stdin.isTTY === false) {"
+  , "    __kip_stdin_mode = 'pipe';"
+  , "    __kip_fs = __kip_fs || __kip_require('fs');"
   , "    try {"
-  , "      __kip_stdin_lines = __kip_fs.readFileSync(0, 'utf8').split('\\n');"
+  , "      __kip_stdin_queue = __kip_fs.readFileSync(0, 'utf8').split('\\n');"
   , "    } catch (e) {"
-  , "      __kip_stdin_lines = [];"
+  , "      __kip_stdin_queue = [];"
   , "    }"
+  , "    __kip_stdin_closed = true;"
+  , "    return;"
+  , "  }"
+  , "  __kip_stdin_mode = 'tty';"
+  , "  if (__kip_readline === null) {"
+  , "    var readline = __kip_require('readline');"
+  , "    __kip_readline = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });"
+  , "    __kip_readline.on('line', (line) => {"
+  , "      if (__kip_stdin_waiters.length > 0) {"
+  , "        __kip_stdin_waiters.shift()(line);"
+  , "      } else {"
+  , "        __kip_stdin_queue.push(line);"
+  , "      }"
+  , "    });"
+  , "    __kip_readline.on('close', () => {"
+  , "      __kip_stdin_closed = true;"
+  , "      while (__kip_stdin_waiters.length > 0) {"
+  , "        __kip_stdin_waiters.shift()('');"
+  , "      }"
+  , "    });"
+  , "  }"
+  , "};"
+  , "var __kip_close_stdin = () => {"
+  , "  if (__kip_readline && __kip_stdin_mode === 'tty') {"
+  , "    __kip_readline.close();"
+  , "    __kip_readline = null;"
   , "  }"
   , "};"
   , ""
@@ -75,16 +156,27 @@ jsPrimitives = T.unlines
   , "var __kip_prim_uzunluk = (s) => s.length;"
   , "var __kip_prim_toplam = (a, b) => a + b;"
   , ""
-  , "// I/O primitives (Node.js)"
-  , "var __kip_prim_oku_stdin = () => {"
-  , "  __kip_init_stdin();"
-  , "  if (__kip_stdin_index < __kip_stdin_lines.length) {"
-  , "    return __kip_stdin_lines[__kip_stdin_index++];"
+  , "// I/O primitives - async to support browser interactivity"
+  , "var __kip_prim_oku_stdin = async () => {"
+  , "  // Check for browser runtime at call time"
+  , "  if (__kip_is_browser && typeof window.__kip_read_line === 'function') {"
+  , "    return await window.__kip_read_line();"
   , "  }"
-  , "  return '';"
+  , "  // Node.js fallback"
+  , "  __kip_init_stdin();"
+  , "  if (__kip_stdin_queue.length > 0) {"
+  , "    return __kip_stdin_queue.shift();"
+  , "  }"
+  , "  if (__kip_stdin_closed) {"
+  , "    return '';"
+  , "  }"
+  , "  return await new Promise((resolve) => {"
+  , "    __kip_stdin_waiters.push(resolve);"
+  , "  });"
   , "};"
   , "var __kip_prim_oku_dosya = (path) => {"
-  , "  __kip_fs = __kip_fs || require('fs');"
+  , "  if (!__kip_require) return __kip_none();"
+  , "  __kip_fs = __kip_fs || __kip_require('fs');"
   , "  try {"
   , "    return __kip_some(__kip_fs.readFileSync(path, 'utf8'));"
   , "  } catch (e) {"
@@ -92,7 +184,8 @@ jsPrimitives = T.unlines
   , "  }"
   , "};"
   , "var __kip_prim_yaz_dosya = (path, content) => {"
-  , "  __kip_fs = __kip_fs || require('fs');"
+  , "  if (!__kip_require) return __kip_false();"
+  , "  __kip_fs = __kip_fs || __kip_require('fs');"
   , "  try {"
   , "    __kip_fs.writeFileSync(path, content);"
   , "    return __kip_true();"
@@ -102,7 +195,14 @@ jsPrimitives = T.unlines
   , "};"
   , ""
   , "// Primitive functions (can be overridden)"
-  , "var yaz = (x) => { console.log(x); return typeof bitimlik === 'function' ? bitimlik() : bitimlik; };"
+  , "var yaz = (x) => {"
+  , "  if (__kip_is_browser && typeof window.__kip_write === 'function') {"
+  , "    window.__kip_write(x);"
+  , "  } else {"
+  , "    console.log(x);"
+  , "  }"
+  , "  return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
+  , "};"
   , "var çarpım = (a, b) => a * b;"
   , "var fark = (a, b) => a - b;"
   , "var eşitlik = (a, b) => a === b ? __kip_true() : __kip_false();"
@@ -117,6 +217,7 @@ jsPrimitives = T.unlines
 -- | Wrappers for overloaded functions that dispatch based on argument type.
 -- These are emitted at the END of the output, after all library code.
 -- They capture the library implementations (if any) and create unified functions.
+-- I/O functions are async to support interactive browser input.
 jsOverloadWrappers :: Text
 jsOverloadWrappers = T.unlines
   [ "// Overload wrappers - dispatch to library or primitive based on type"
@@ -126,41 +227,45 @@ jsOverloadWrappers = T.unlines
   , "var __kip_lib_toplam = typeof toplam === 'function' ? toplam : null;"
   , "var __kip_lib_yaz = typeof yaz === 'function' ? yaz : null;"
   , ""
-  , "var ters = (x) => {"
+  , "var ters = async (x) => {"
   , "  if (typeof x === 'string') return __kip_prim_ters(x);"
-  , "  if (__kip_lib_ters) return __kip_lib_ters(x);"
+  , "  if (__kip_lib_ters) return await __kip_lib_ters(x);"
   , "  throw new Error('ters: unsupported type');"
   , "};"
   , ""
-  , "var birleşim = (a, b) => {"
+  , "var birleşim = async (a, b) => {"
   , "  if (typeof a === 'string' || typeof a === 'number') return __kip_prim_birleşim(a, b);"
-  , "  if (__kip_lib_birleşim) return __kip_lib_birleşim(a, b);"
+  , "  if (__kip_lib_birleşim) return await __kip_lib_birleşim(a, b);"
   , "  throw new Error('birleşim: unsupported type');"
   , "};"
   , ""
-  , "var uzunluk = (x) => {"
+  , "var uzunluk = async (x) => {"
   , "  if (typeof x === 'string') return __kip_prim_uzunluk(x);"
-  , "  if (__kip_lib_uzunluk) return __kip_lib_uzunluk(x);"
+  , "  if (__kip_lib_uzunluk) return await __kip_lib_uzunluk(x);"
   , "  throw new Error('uzunluk: unsupported type');"
   , "};"
   , ""
-  , "var toplam = (...args) => {"
+  , "var toplam = async (...args) => {"
   , "  if (args.length === 2 && typeof args[0] === 'number') return __kip_prim_toplam(args[0], args[1]);"
-  , "  if (args.length === 1 && __kip_lib_toplam) return __kip_lib_toplam(args[0]);"
-  , "  if (__kip_lib_toplam) return __kip_lib_toplam(...args);"
+  , "  if (args.length === 1 && __kip_lib_toplam) return await __kip_lib_toplam(args[0]);"
+  , "  if (__kip_lib_toplam) return await __kip_lib_toplam(...args);"
   , "  return __kip_prim_toplam(...args);"
   , "};"
   , ""
-  , "// I/O wrappers"
-  , "var oku = (...args) => {"
-  , "  if (args.length === 0) return __kip_prim_oku_stdin();"
+  , "// I/O wrappers - async for interactive browser support"
+  , "var oku = async (...args) => {"
+  , "  if (args.length === 0) return await __kip_prim_oku_stdin();"
   , "  if (args.length === 1 && typeof args[0] === 'string') return __kip_prim_oku_dosya(args[0]);"
   , "  throw new Error('oku: unsupported arguments');"
   , "};"
   , ""
   , "var yaz = (...args) => {"
   , "  if (args.length === 1) {"
-  , "    console.log(args[0]);"
+  , "    if (__kip_is_browser && typeof window.__kip_write === 'function') {"
+  , "      window.__kip_write(args[0]);"
+  , "    } else {"
+  , "      console.log(args[0]);"
+  , "    }"
   , "    return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
   , "  }"
   , "  if (args.length === 2 && typeof args[0] === 'string') {"
@@ -171,16 +276,16 @@ jsOverloadWrappers = T.unlines
   , "};"
   ]
 
--- | Transpile a list of statements (no prelude).
-transpileStmts :: [Stmt Ann] -> Text
-transpileStmts = T.intercalate "\n\n" . map transpileStmt
+-- | Codegen a list of statements (no prelude).
+codegenStmts :: [Stmt Ann] -> Text
+codegenStmts = T.intercalate "\n\n" . map codegenStmt
 
--- | Transpile a single statement into JS-like code.
-transpileStmt :: Stmt Ann -> Text
-transpileStmt stmt =
+-- | Codegen a single statement into JS-like code.
+codegenStmt :: Stmt Ann -> Text
+codegenStmt stmt =
   case stmt of
     Defn name _ exp' ->
-      "const " <> toJsIdent name <> " = " <> transpileExp exp' <> ";"
+      "const " <> toJsIdent name <> " = " <> codegenExp exp' <> ";"
     Function name args _ clauses _ ->
       renderFunction name args clauses
     PrimFunc name args _ _ ->
@@ -192,11 +297,11 @@ transpileStmt stmt =
     PrimType name ->
       "// primitive type " <> identText name
     ExpStmt exp' ->
-      transpileExp exp' <> ";"
+      codegenExp exp' <> ";"
 
--- | Transpile an expression into a JS-like expression string.
-transpileExp :: Exp Ann -> Text
-transpileExp exp' =
+-- | Codegen an expression into a JS-like expression string.
+codegenExp :: Exp Ann -> Text
+codegenExp exp' =
   case exp' of
     Var {varName, varCandidates} ->
       case varCandidates of
@@ -210,16 +315,16 @@ transpileExp exp' =
       renderCall fn args
     Bind {bindName, bindExp} ->
       renderIife
-        [ "const " <> toJsIdent bindName <> " = " <> transpileExp bindExp <> ";"
+        [ "const " <> toJsIdent bindName <> " = " <> codegenExp bindExp <> ";"
         , "return " <> toJsIdent bindName <> ";"
         ]
     Seq {first, second} ->
       renderIife
-        (renderExpAsStmt first ++ ["return " <> transpileExp second <> ";"])
+        (renderExpAsStmt first ++ ["return " <> codegenExp second <> ";"])
     Match {scrutinee, clauses} ->
       renderMatch scrutinee clauses
     Let {body} ->
-      transpileExp body
+      codegenExp body
 
 renderFunction :: Identifier -> [Arg Ann] -> [Clause Ann] -> Text
 renderFunction name args clauses =
@@ -227,7 +332,7 @@ renderFunction name args clauses =
       bodyLines =
         case clauses of
           [Clause PWildcard body] ->
-            ["return " <> transpileExp body <> ";"]
+            ["return " <> codegenExp body <> ";"]
           _ ->
             let arg0 = case args of
                          [] -> "__arg0"
@@ -236,7 +341,7 @@ renderFunction name args clauses =
                : renderClauseChain "__scrut" clauses
   in
     T.unlines
-      [ "function " <> toJsIdent name <> "(" <> argsText <> ") {"
+      [ "async function " <> toJsIdent name <> "(" <> argsText <> ") {"
       , indent 2 (T.unlines bodyLines)
       , "}"
       ]
@@ -252,7 +357,7 @@ renderSwitchCase scrutinee (Clause pat body) =
   case pat of
     PWildcard ->
       [ "  default: {"
-      , indent 4 (T.unlines ["return " <> transpileExp body <> ";"])
+      , indent 4 (T.unlines ["return " <> codegenExp body <> ";"])
       , "  }"
       ]
     PCtor ctor vars ->
@@ -264,7 +369,7 @@ renderSwitchCase scrutinee (Clause pat body) =
               _ ->
                 [ "const [" <> T.intercalate ", " uniqueVars <> "] = "
                     <> scrutinee <> ".args || [];"]
-          bodyLines = binds ++ ["return " <> transpileExp body <> ";"]
+          bodyLines = binds ++ ["return " <> codegenExp body <> ";"]
       in
         [ "  case " <> renderString (normalizeCtorName ctor) <> ": {"
         , indent 4 (T.unlines bodyLines)
@@ -291,7 +396,7 @@ makeUniqueVars = go [] []
 renderMatch :: Exp Ann -> [Clause Ann] -> Text
 renderMatch scrutinee clauses =
   renderIife $
-    ("const __scrut = " <> transpileExp scrutinee <> ";")
+    ("const __scrut = " <> codegenExp scrutinee <> ";")
       : renderMatchClauses "__scrut" clauses
 
 renderMatchClauses :: Text -> [Clause Ann] -> [Text]
@@ -393,24 +498,24 @@ renderCall :: Exp Ann -> [Exp Ann] -> Text
 renderCall fn args =
   let fnText =
         case fn of
-          Var {} -> transpileExp fn
-          _ -> "(" <> transpileExp fn <> ")"
-  in fnText <> "(" <> T.intercalate ", " (map transpileExp args) <> ")"
+          Var {} -> codegenExp fn
+          _ -> "(" <> codegenExp fn <> ")"
+  in "(await " <> fnText <> "(" <> T.intercalate ", " (map codegenExp args) <> "))"
 
 renderExpAsStmt :: Exp Ann -> [Text]
 renderExpAsStmt exp' =
   case exp' of
     Bind {bindName, bindExp} ->
-      ["const " <> toJsIdent bindName <> " = " <> transpileExp bindExp <> ";"]
+      ["const " <> toJsIdent bindName <> " = " <> codegenExp bindExp <> ";"]
     _ ->
-      [transpileExp exp' <> ";"]
+      [codegenExp exp' <> ";"]
 
 renderIife :: [Text] -> Text
 renderIife lines' =
   T.unlines
-    [ "(() => {"
+    [ "(await (async () => {"
     , indent 2 (T.unlines lines')
-    , "})()"
+    , "})())"
     ]
 
 renderArgNames :: [Arg Ann] -> Text
