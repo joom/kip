@@ -3,6 +3,35 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- | Type checker and type inference for Kip.
+-- |
+-- | This module performs a single-pass, syntax-directed type check over the AST
+-- | while threading a mutable 'TCState'. The overall shape is:
+-- |
+-- |   1. Resolve identifiers against the current scope ('tcCtx') and collect
+-- |      candidate bindings (values, functions, constructors).
+-- |   2. Infer types for subexpressions bottom-up, producing 'Maybe (Ty Ann)'
+-- |      so unknowns can be propagated without immediately failing.
+-- |   3. Validate applications by matching argument types and grammatical cases
+-- |      against function signatures and constructor signatures.
+-- |   4. Commit successful matches by returning a rewritten expression with
+-- |      arguments reordered to the signature's expected case order.
+-- |
+-- | Ambiguity elimination is handled at the call-site resolution step:
+-- |
+-- |   * Each function name may have multiple overloads ('tcFuncSigs'). We
+-- |     filter by arity first, then by argument case, then by type unification.
+-- |   * Argument cases are compared against the signature's case annotations.
+-- |     If needed, 'reorderByCases' permutes arguments so they line up with the
+-- |     expected cases. If case matching fails, that overload is rejected.
+-- |   * For types, 'typeMatchesAllowUnknown' permits unknowns during inference,
+-- |     but if all argument types are known and no overload matches, the checker
+-- |     raises 'NoMatchingOverload' rather than picking arbitrarily.
+-- |   * Constructor applications are checked similarly via 'tcCtors', but do
+-- |     not allow overload-style ambiguity: any mismatch yields 'NoMatchingCtor'.
+-- |
+-- | The combination of case-aware reordering plus arity/type filtering makes
+-- | overload resolution deterministic: there is either a unique applicable
+-- | overload or a precise error describing why none match.
 module Kip.TypeCheck where
 
 import GHC.Generics (Generic)
@@ -16,8 +45,10 @@ import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
-import Data.List (nub, elemIndex, sort, find, foldl')
+import Data.List (find, foldl', nub)
 import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.Text as T
 
 -- | Type checker state for names, signatures, and constructors.
@@ -497,17 +528,18 @@ reorderByCases :: forall a.
                -> Maybe [a] -- ^ Reordered values when possible.
 reorderByCases expected actual xs
   | length expected /= length actual = Nothing
-  | nub expected /= expected = Nothing
-  | nub actual /= actual = Nothing
-  | sort expected /= sort actual = Nothing
+  | Set.size expectedSet /= length expected = Nothing
+  | Set.size actualSet /= length actual = Nothing
+  | expectedSet /= actualSet = Nothing
   | otherwise = mapM pick expected
   where
+    expectedSet = Set.fromList expected
+    actualSet = Set.fromList actual
+    mapping = Map.fromList (zip actual xs)
     -- | Pick the value corresponding to a case.
     pick :: Case -- ^ Desired case.
          -> Maybe a -- ^ Selected value.
-    pick cas = do
-      idx <- elemIndex cas actual
-      return (xs !! idx)
+    pick cas = Map.lookup cas mapping
 
 -- | Type-check a clause in the context of argument types.
 tcClause :: [Arg Ann] -- ^ Argument signature.
