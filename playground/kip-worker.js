@@ -8,6 +8,7 @@ const libFiles = [
   "temel-etki.kip",
   "temel-liste.kip",
   "temel-tam-sayı.kip",
+  "temel-ondalık-sayı.kip",
 ];
 
 async function loadText(path) {
