@@ -90,6 +90,14 @@ playground/dist/style.css
 playground/dist/assets/...
 ```
 
+The build also precompiles `.iz` caches for the standard library into
+`playground/dist/assets/lib` using `wasmtime`. To regenerate caches without
+rebuilding the WASM binary, run:
+
+```
+./playground/build-iz-wasm.sh
+```
+
 ## Run locally
 
 Serve the `playground/dist` folder with any static server. If you want interactive

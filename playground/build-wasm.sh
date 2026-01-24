@@ -10,7 +10,6 @@ WASM_CC="${WASM_CC:-wasm32-wasi-clang}"
 WASM_CABAL="${WASM_CABAL:-wasm32-wasi-cabal}"
 ZLIB_WASM_PREFIX="${ZLIB_WASM_PREFIX:-${ROOT_DIR}/playground/.foma-wasm/zlib-wasm}"
 WASM_OPT="${WASM_OPT:-wasm-opt}"
-WASMTIME="${WASMTIME:-wasmtime}"
 
 if [[ -z "${FOMA_WASM_PREFIX:-}" ]]; then
   echo "FOMA_WASM_PREFIX is not set."
@@ -54,25 +53,6 @@ else
 fi
 
 "${ROOT_DIR}/playground/build-assets.sh"
-
-if command -v "${WASMTIME}" >/dev/null 2>&1; then
-  WASMTIME_CMD=("${WASMTIME}")
-  if "${WASMTIME}" --help 2>/dev/null | grep -q " run "; then
-    WASMTIME_CMD=("${WASMTIME}" "run")
-  fi
-  if "${WASMTIME}" --help 2>/dev/null | grep -q -- "--mapdir"; then
-    "${WASMTIME_CMD[@]}" \
-      --mapdir "/::${DIST_DIR}/assets" \
-      --env "KIP_DATADIR=/" \
-      "${DIST_DIR}/kip-playground.wasm" --build /lib
-  else
-    "${WASMTIME_CMD[@]}" \
-      --dir "${DIST_DIR}/assets" \
-      --env "KIP_DATADIR=${DIST_DIR}/assets" \
-      "${DIST_DIR}/kip-playground.wasm" --build "${DIST_DIR}/assets/lib"
-  fi
-else
-  echo "Note: ${WASMTIME} not found; skipping precompilation of .iz caches."
-fi
+"${ROOT_DIR}/playground/build-iz-wasm.sh"
 
 echo "WASM build complete: ${DIST_DIR}/kip-playground.wasm"
