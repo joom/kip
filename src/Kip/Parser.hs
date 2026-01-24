@@ -7,7 +7,7 @@
 module Kip.Parser where
 
 import Data.List
-import Data.Maybe (maybeToList, mapMaybe, isJust, fromMaybe)
+import Data.Maybe (maybeToList, mapMaybe, isJust, isNothing, fromMaybe)
 import qualified Data.Map.Strict as M
 import Control.Applicative (optional)
 import Control.Monad (forM, guard)
@@ -256,7 +256,7 @@ identifier = do
 identifierNotKeyword :: KipParser Identifier -- ^ Parsed identifier.
 identifierNotKeyword = do
   ident@(ss, s) <- identifier
-  if null ss && s `elem` ["ya", "var", "diyelim", "olarak"]
+  if null ss && s `elem` ["ya", "var", "olarak", "dersek"]
     then customFailure ErrKeywordAsIdent
     else return ident
 
@@ -890,7 +890,7 @@ parseExpAny = parseExpWithCtx False
 parseExpWithCtx :: Bool -- ^ Whether to use context when resolving names.
                 -> KipParser (Exp Ann) -- ^ Parsed expression.
 parseExpWithCtx useCtx =
-  seqExp
+  letExp <|> seqExp
   where
     -- | Parse a numeric literal with case.
     numberLiteral :: KipParser (Exp Ann) -- ^ Parsed numeric literal.
@@ -938,6 +938,33 @@ parseExpWithCtx useCtx =
       action <- app <|> atom
       let ann = mkAnn (annCase (annExp action)) (mergeSpan sp (annSpan (annExp action)))
       return (Bind ann name action)
+    -- | Parse a let expression with "dersek".
+    letExp :: KipParser (Exp Ann) -- ^ Parsed let expression.
+    letExp = try $ do
+      items <- some (lexeme atom)
+      let (exprItems, nameItem) =
+            case reverse items of
+              name:revExpr -> (reverse revExpr, name)
+              [] -> error "let expression needs at least two items"
+      (rawName, nameSpan) <- case nameItem of
+        Var annExp n _ -> return (n, annSpan annExp)
+        _ -> customFailure ErrDefinitionName
+      name <- normalizePossessive rawName
+      if null exprItems
+        then customFailure ErrDefinitionBodyMissing
+        else do
+          val <- buildAppFrom exprItems
+          let bindSpan = mergeSpan (annSpan (annExp val)) nameSpan
+              bindAnn = mkAnn (annCase (annExp val)) bindSpan
+              bindExp = Bind bindAnn name val
+          lexeme (string "dersek")
+          lexeme (char ',')
+          st <- getP
+          putP st { parserCtx = name : parserCtx st }
+          body <- parseExpWithCtx useCtx
+          putP st
+          let ann = mkAnn (annCase (annExp body)) (mergeSpan bindSpan (annSpan (annExp body)))
+          return (Seq ann bindExp body)
     -- | Parse comma-separated sequence expressions.
     seqExp :: KipParser (Exp Ann) -- ^ Parsed sequence expression.
     seqExp = do
@@ -1164,7 +1191,7 @@ parseExpWithCtx useCtx =
 
 -- | Parse a top-level statement.
 parseStmt :: KipParser (Stmt Ann) -- ^ Parsed statement.
-parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expFirst
+parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
   where
     -- | Parse a module load statement.
     loadStmt :: KipParser (Stmt Ann) -- ^ Parsed load statement.
@@ -1322,80 +1349,6 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
           if nameForTy `elem` tyNames
             then return (TyInd ann nameForTy)
             else return (TyVar ann nameForTy)
-    -- | Parse a value definition.
-    def :: KipParser (Stmt Ann) -- ^ Parsed value definition.
-    def = do
-      items <- some (lexeme defItem)
-      let (exprItems, nameItem) =
-            case reverse items of
-              name:revExpr -> (reverse revExpr, name)
-              [] -> error "definition needs at least two items"
-      st <- getP
-      exprItems' <- mapM (restrictCandidates (parserCtx st)) exprItems
-      rawName <- case nameItem of
-        Var _ n _ -> return n
-        _ -> customFailure ErrDefinitionName
-      -- Normalize the name to strip possessive suffix if present
-      name <- normalizePossessive rawName
-      e <- buildApp exprItems'
-      lexeme (string "diyelim")
-      period
-      modifyP (\ps -> ps {parserCtx = name : parserCtx ps})
-      return (Defn name (TyString (mkAnn Nom NoSpan)) e)
-    -- | Parse a definition item (argument or name).
-    defItem :: KipParser (Exp Ann) -- ^ Parsed definition item.
-    defItem = try (parens parseExp) <|> try defItemStringLit <|> try defItemNumberLit <|> defItemVar
-    -- | Parse a definition item as a string literal.
-    defItemStringLit :: KipParser (Exp Ann) -- ^ Parsed string literal definition item.
-    defItemStringLit = do
-      ((txt, cas), sp) <- withSpan parseStringToken
-      return (StrLit (mkAnn cas sp) txt)
-    -- | Parse a definition item as a number literal.
-    defItemNumberLit :: KipParser (Exp Ann) -- ^ Parsed number literal definition item.
-    defItemNumberLit = do
-      (token, sp) <- withSpan parseNumberToken
-      cas <- numberCase token
-      if isFloatToken token
-        then
-          let val = parseNumberValueFloat token
-          in return (FloatLit (mkAnn cas sp) val)
-        else
-          let val = parseNumberValue token
-          in return (IntLit (mkAnn cas sp) val)
-    -- | Parse a definition item as a variable.
-    defItemVar :: KipParser (Exp Ann) -- ^ Parsed definition item variable.
-    defItemVar = do
-      notFollowedBy (string "diyelim")
-      (name, sp) <- withSpan identifier
-      candidates <- estimateCandidates False name
-      return (Var (mkAnn (pickCase False candidates) sp) name candidates)  -- Definitions are never P3s
-    -- | Build an application expression from items.
-    buildApp :: [Exp Ann] -- ^ Expression items.
-             -> KipParser (Exp Ann) -- ^ Built application.
-    buildApp xs =
-      case xs of
-        [] -> customFailure ErrDefinitionBodyMissing
-        [x] -> return x
-        first:_ ->
-          case reverse xs of
-            x:revRest ->
-              let rest = reverse revRest
-                  start = annSpan (annExp first)
-                  end = annSpan (annExp x)
-                  ann = mkAnn (annCase (annExp x)) (mergeSpan start end)
-              in return (App ann x rest)
-            [] -> customFailure ErrDefinitionBodyMissing
-    -- | Restrict variable candidates to the current context.
-    restrictCandidates :: [Identifier] -- ^ Context identifiers.
-                       -> Exp Ann -- ^ Expression to restrict.
-                       -> KipParser (Exp Ann) -- ^ Updated expression.
-    restrictCandidates ctx expItem =
-      case expItem of
-        Var annExp name candidates ->
-          case filter (\(ident, _) -> ident `elem` ctx) candidates of
-            [] -> customFailure ErrNoMatchingNominative
-            filtered -> return (Var (setAnnCase annExp (pickCase False filtered)) name filtered)  -- Definition values are never P3s
-        _ -> return expItem
     -- | Parse a statement starting with an expression.
     expFirst :: KipParser (Stmt Ann) -- ^ Parsed expression statement.
     expFirst = do
@@ -1439,25 +1392,35 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
                         (cand, _) <- resolveCandidate False baseName
                         return (cand, Nom)
       lexeme (char ',')
-      st <- getP
-      let argNames = map fst args
-      putP (st {parserCtx = fname : argNames ++ parserCtx st})
-      prim <- optional (try (lexeme (string "yerleşiktir") *> period))
-      let retTy = fromMaybe (TyString (mkAnn Nom NoSpan)) mRetTy
-      case prim of
-        Just _ -> do
-          st' <- getP
-          putP (st' {parserCtx = fname : parserCtx st})
-          return (PrimFunc fname args retTy isGerund)
-        Nothing -> do
-          isBindStart <- option False (try bindStartLookahead)
-          clauses <-
-            if isBindStart
-              then parseBodyOnly
-              else try parseBodyOnly <|> parseClauses argNames
-          st' <- getP
-          putP (st' {parserCtx = fname : parserCtx st})
-          return (Function fname args retTy clauses isGerund)
+      let isDefnCandidate = null args && not isGerund && isNothing mRetTy
+      if isDefnCandidate
+        then do
+          clauses <- parseBodyOnly
+          case clauses of
+            [Clause PWildcard body] -> do
+              modifyP (\ps -> ps {parserCtx = fname : parserCtx ps})
+              return (Defn fname (TyString (mkAnn Nom NoSpan)) body)
+            _ -> customFailure ErrDefinitionBodyMissing
+        else do
+          st <- getP
+          let argNames = map fst args
+          putP (st {parserCtx = fname : argNames ++ parserCtx st})
+          prim <- optional (try (lexeme (string "yerleşiktir") *> period))
+          let retTy = fromMaybe (TyString (mkAnn Nom NoSpan)) mRetTy
+          case prim of
+            Just _ -> do
+              st' <- getP
+              putP (st' {parserCtx = fname : parserCtx st})
+              return (PrimFunc fname args retTy isGerund)
+            Nothing -> do
+              isBindStart <- option False (try bindStartLookahead)
+              clauses <-
+                if isBindStart
+                  then parseBodyOnly
+                  else try parseBodyOnly <|> parseClauses argNames
+              st' <- getP
+              putP (st' {parserCtx = fname : parserCtx st})
+              return (Function fname args retTy clauses isGerund)
     -- | Parse function header with optional return type.
     parseFuncHeader :: KipParser (Identifier, Maybe (Ty Ann)) -- ^ Function name and optional return type.
     parseFuncHeader = do

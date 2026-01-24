@@ -104,11 +104,11 @@ Supports nested pattern matching, binders, and wildcard patterns (`değilse`):
 
 ### Constants
 
-Define named constants with `diyelim`:
+Define named constants with a definition sentence:
 
 ```
-merhabaya "Merhaba" diyelim.
-dünyaya "Dünya" diyelim.
+merhaba, "Merhaba"'dır.
+dünya, "Dünya"'dır.
 ```
 
 ### Effects and I/O

@@ -26,9 +26,9 @@ const keywordList = [
   "olamaz",
   "değilse",
   "yazdır",
-  "diyelim",
   "olsun",
   "olarak",
+  "dersek",
   "yerleşik",
 ];
 
