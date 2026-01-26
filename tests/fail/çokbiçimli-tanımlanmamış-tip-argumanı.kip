@@ -1,0 +1,8 @@
+Bir (a'yla b çifti)
+ya bir a'yla bir b çifti
+olabilir.
+
+(* Tip başlıklarında bulunmayan tip değişkenleri yapkılarda kullanılamaz. *)
+Bir (c'yle d ikilisi)
+ya bir a'yla bir d ikilisi
+olabilir.
