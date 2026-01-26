@@ -1,0 +1,9 @@
+(* Çokbiçimli tekli tipi. Tip ve yapkı ismi aynı. *)
+Bir (a teklisi)
+ya bir a teklisi
+olabilir.
+
+(bu tam-sayı teklisinin) içeriği,
+  bu şu teklisiyse, şudur.
+
+((5 teklisinin) içeriğini) yaz.
