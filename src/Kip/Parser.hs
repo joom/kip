@@ -223,6 +223,18 @@ type Outer = IO
 -- | Parser type for Kip with state and IO.
 type KipParser = ParsecT ParserError Text (StateT ParserState Outer)
 
+-- | Turkish case suffixes for apostrophe-marked identifiers (type variables).
+-- Used for parsing and stripping case markers in multi-parameter types.
+turkishCaseSuffixes :: [(String, Case)]
+turkishCaseSuffixes =
+  [ ("'yla", Ins), ("'yle", Ins), ("'la", Ins), ("'le", Ins)
+  , ("'den", Abl), ("'dan", Abl), ("'ten", Abl), ("'tan", Abl)
+  , ("'nin", Gen), ("'nın", Gen), ("'nun", Gen), ("'nün", Gen)
+  , ("'yi", Acc), ("'yı", Acc), ("'yu", Acc), ("'yü", Acc)
+  , ("'ye", Dat), ("'ya", Dat)
+  , ("'de", Loc), ("'da", Loc), ("'te", Loc), ("'ta", Loc)
+  ]
+
 -- | Pre-populate a morphology cache with common Turkish demonstrative pronouns.
 -- These are pattern variables that TRmorph may not analyze correctly.
 -- Entries are stored in TRmorph format: "base<case_tag>"
@@ -870,8 +882,7 @@ Type parameters with case suffixes create problems:
 * And we see @"b'yle"@ (instrumental)
 * They don't match exactly, even though both are variants of @"b"@
 
-Current approach: Try exact match, then morphology.
-TODO: Consider base-form matching for type parameters (see MULTI_PARAM_TYPE_FIX_NOTES.md)
+Current approach: Try exact match, then morphology with base-form matching.
 -}
 resolveTypeCandidatePreferCtx :: Identifier -- ^ Surface type identifier.
                               -> KipParser (Identifier, Case) -- ^ Resolved type identifier and case.
@@ -1624,10 +1635,9 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     Type parameters may be written with Turkish case suffixes:
     * @(a'yla b'den biri)@ - "a" with instrumental, "b" with ablative
 
-    When storing in @parserTyParams@, we keep the ORIGINAL form including suffixes.
-    This creates challenges when resolving constructor argument types, as @b'yle@
-    (instrumental) should match parameter @b'den@ (ablative) since they have the
-    same base @b@. See MULTI_PARAM_TYPE_FIX_NOTES.md for details.
+    When storing in @parserTyParams@, we strip case suffixes and store base forms.
+    For example, @a'yla@ is stored as @a@. This allows constructor arguments with
+    different case suffixes (like @a'yle@) to match the same type parameter.
 
     = State Updates
 
@@ -1674,21 +1684,12 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     parseTypeParam :: Identifier -> KipParser (Ty Ann)
     parseTypeParam rawIdent@(mods, word) = do
       (_, sp) <- withSpan (return ())
-      -- Check for apostrophe-based case markers (common for type variables)
-      let caseSuffixes =
-            [ ("'yla", Ins), ("'yle", Ins), ("'la", Ins), ("'le", Ins)
-            , ("'den", Abl), ("'dan", Abl), ("'ten", Abl), ("'tan", Abl)
-            , ("'nin", Gen), ("'nın", Gen), ("'nun", Gen), ("'nün", Gen)
-            , ("'yi", Acc), ("'yı", Acc), ("'yu", Acc), ("'yü", Acc)
-            , ("'ye", Dat), ("'ya", Dat)
-            , ("'de", Loc), ("'da", Loc), ("'te", Loc), ("'ta", Loc)
-            ]
-          tryStripSuffix [] = Nothing
+      let tryStripSuffix [] = Nothing
           tryStripSuffix ((suff, cas):rest) =
             case T.stripSuffix (T.pack suff) word of
               Just base | T.length base > 0 -> Just (base, cas)
               _ -> tryStripSuffix rest
-      case tryStripSuffix caseSuffixes of
+      case tryStripSuffix turkishCaseSuffixes of
         Just (base, cas) ->
           -- Found a case suffix, use base identifier with detected case
           return (TyVar (mkAnn cas sp) (mods, base))
@@ -1966,10 +1967,6 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
           -- Add pattern variables to context when parsing body
           body <- withPatVars patVarNames parseExp
           return (Clause pat body)
-    -- | Parse a pattern expression (before conversion to Pat).
-    parsePatternExp :: Bool -- ^ Whether to allow scrutinee expressions.
-                    -> KipParser (Exp Ann) -- ^ Parsed pattern expression.
-    parsePatternExp _allowScrutinee = parseExpAny
     -- | Parse a pattern, optionally allowing a scrutinee expression.
     parsePattern :: Bool -- ^ Whether to allow scrutinee expressions.
                  -> [Identifier] -- ^ Function argument names.
@@ -2013,28 +2010,21 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
 
     = Turkish Morphology Challenges
 
-    Type parameters with different case suffixes are problematic:
+    Type parameters may be written with different case suffixes:
 
     * Type defined as: @Bir (a'yla b'den biri)@
-    * @parserTyParams@ contains: @[([], "a'yla"), ([], "b'den")]@
-    * Constructor: @bir b'yle sağı@ (instrumental case)
-    * Problem: @"b'yle"@ doesn't exactly match @"b'den"@!
+    * Case suffixes are stripped during parsing
+    * @parserTyParams@ contains base forms: @[([], "a"), ([], "b")]@
+    * Constructor arguments with any case suffix can reference these parameters
 
-    == Current Solution
+    == Solution
 
-    The @findMatchingTypeParam@ helper strips case suffixes to match by base form:
-    * @"b'yle"@ → @"b"@ (strip @'yle@)
-    * @"b'den"@ → @"b"@ (strip @'den@)
-    * Match! Return the parameter name from @parserTyParams@
+    The @findMatchingTypeParam@ and @parseTypeParam@ helpers strip case suffixes:
+    * @"a'yla"@ → @"a"@ (strip @'yla@, store base form)
+    * @"b'den"@ → @"b"@ (strip @'den@, store base form)
+    * Constructor argument @"b'yle"@ → @"b"@ → matches parameter @"b"@
 
-    This allows @"b'yle"@ to resolve to the type parameter @"b'den"@.
-
-    == Limitations
-
-    This approach has issues (see MULTI_PARAM_TYPE_FIX_NOTES.md):
-    * Only works in @argTy@ helper, not in all parsing contexts
-    * Type definitions themselves still fail to parse
-    * Doesn't handle all morphological variations
+    This allows type parameters to be referenced with any case suffix.
 
     = Implementation Notes
 
@@ -2109,13 +2099,8 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
             -}
             stripCaseSuffix :: Identifier -> Identifier
             stripCaseSuffix (mods, word) =
-              let suffixes = ["'yla", "'yle", "'la", "'le",
-                              "'den", "'dan", "'ten", "'tan",
-                              "'nin", "'nın", "'nun", "'nün",
-                              "'yi", "'yı", "'yu", "'yü",
-                              "'ye", "'ya",
-                              "'de", "'da", "'te", "'ta"]
-                  lowerWord = T.toLower word
+              let lowerWord = T.toLower word
+                  suffixes = map fst turkishCaseSuffixes
                   tryStrip [] = word
                   tryStrip (suff:rest) =
                     if T.pack suff `T.isSuffixOf` lowerWord
@@ -2128,29 +2113,26 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
 
             {- | Find a type parameter that matches the identifier by base form.
 
-            This is part of the multi-parameter type fix (see MULTI_PARAM_TYPE_FIX_NOTES.md).
+            = Purpose
 
-            = Problem
-
-            Type parameters are stored with their original case suffixes:
+            Type parameters are stored in base form (without case suffixes):
             * Type: @Bir (a'yla b'den biri)@
-            * @parserTyParams = [([], "a'yla"), ([], "b'den")]@
+            * @parserTyParams = [([], "a"), ([], "b")]@ (suffixes stripped)
 
-            But constructor arguments may use different cases:
+            Constructor arguments may appear with case suffixes:
             * Constructor: @bir b'yle sağı@
             * Surface form: @"b'yle"@ (instrumental)
-            * Not in @parserTyParams@!
 
             = Solution
 
-            Match by stripping case suffixes from both sides:
+            Match by stripping case suffixes from the input:
             1. Strip from input: @"b'yle"@ → @"b"@
-            2. Strip from params: @"b'den"@ → @"b"@
-            3. Compare: @"b"@ == @"b"@ ✓
-            4. Return the original parameter: @"b'den"@
+            2. Look in params for: @"b"@
+            3. Found: @"b"@ matches parameter @"b"@ ✓
+            4. Return the parameter: @"b"@
 
             This ensures all references to the same type variable use the
-            same identifier for type checking.
+            same base identifier for type checking.
 
             = Return Value
 

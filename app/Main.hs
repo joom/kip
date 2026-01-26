@@ -588,7 +588,7 @@ renderCompilerMsgBasic msg = do
       MsgDefnAdded name ->
         Just $
           case rcLang ctx of
-            LangTr -> renderDefnLine (rcUseColor ctx) (renderNameBold (rcUseColor ctx) (T.pack (prettyIdent name)) <> " tanımı tanımlandı.")
+            LangTr -> renderDefnLine (rcUseColor ctx) (renderNameBold (rcUseColor ctx) (T.pack (prettyIdent name)) <> " tanımlandı.")
             LangEn -> renderDefnLine (rcUseColor ctx) (renderNameBold (rcUseColor ctx) (T.pack (prettyIdent name)) <> " definition defined.")
       MsgTypeAdded name ->
         Just $
