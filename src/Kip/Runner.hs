@@ -15,6 +15,7 @@ module Kip.Runner
   , ParserErrorEn(..)
   , renderMsg
   , renderParseError
+  , renderEvalError
   , renderTCError
   , renderTCErrorWithSource
   , renderSpan
@@ -132,6 +133,30 @@ instance ShowErrorComponent ParserErrorTr where
 instance ShowErrorComponent ParserErrorEn where
   showErrorComponent (ParserErrorEn err) = T.unpack (renderParserErrorEn err)
 
+{- | Render evaluation errors with proper localization.
+
+Evaluation errors occur at runtime and include:
+- UnboundVariable: Variable not found in any namespace
+- NoMatchingFunction: Function call with no matching overload
+- NoMatchingClause: Pattern match with no matching clause
+- Unknown: Unexpected evaluation failure
+-}
+renderEvalError :: Lang -> EvalError -> Text
+renderEvalError lang evalErr =
+  case lang of
+    LangTr ->
+      case evalErr of
+        Eval.Unknown -> "Değerleme hatası: bilinmeyen hata."
+        Eval.UnboundVariable name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " tanımlı değil."
+        Eval.NoMatchingFunction name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " için uygun bir tanım bulunamadı."
+        Eval.NoMatchingClause -> "Değerleme hatası: eşleşen bir dal bulunamadı."
+    LangEn ->
+      case evalErr of
+        Eval.Unknown -> "Evaluation error: unknown error."
+        Eval.UnboundVariable name -> "Evaluation error: " <> T.pack (prettyIdent name) <> " is not defined."
+        Eval.NoMatchingFunction name -> "Evaluation error: no matching definition found for " <> T.pack (prettyIdent name) <> "."
+        Eval.NoMatchingClause -> "Evaluation error: no matching clause found."
+
 -- | Render a compiler message to text.
 renderMsg :: CompilerMsg -> RenderM Text
 renderMsg msg = do
@@ -175,20 +200,7 @@ renderMsg msg = do
           LangTr -> "Dosya çalıştırılamadı."
           LangEn -> "File could not be executed."
     MsgEvalError evalErr ->
-      return $
-        case rcLang ctx of
-          LangTr ->
-            case evalErr of
-              Eval.Unknown -> "Değerleme hatası: bilinmeyen hata."
-              Eval.UnboundVariable name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " tanımlı değil."
-              Eval.NoMatchingFunction name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " için uygun bir tanım bulunamadı."
-              Eval.NoMatchingClause -> "Değerleme hatası: eşleşen bir dal bulunamadı."
-          LangEn ->
-            case evalErr of
-              Eval.Unknown -> "Evaluation error: unknown error."
-              Eval.UnboundVariable name -> "Evaluation error: " <> T.pack (prettyIdent name) <> " is not defined."
-              Eval.NoMatchingFunction name -> "Evaluation error: no matching definition found for " <> T.pack (prettyIdent name) <> "."
-              Eval.NoMatchingClause -> "Evaluation error: no matching clause found."
+      return $ renderEvalError (rcLang ctx) evalErr
     MsgTCError tcErr mSource paramTyCons tyMods ->
       case mSource of
         Nothing -> renderTCError paramTyCons tyMods tcErr

@@ -43,6 +43,7 @@ import Kip.TypeCheck
 import qualified Kip.TypeCheck as TC
 import Kip.Render
 import Kip.Cache
+import Kip.Runner (Lang(..), renderEvalError)
 import Kip.Codegen.JS (codegenProgram)
 import Data.Word
 import Crypto.Hash.SHA256 (hash)
@@ -82,12 +83,6 @@ data CliOptions =
     , optLang :: Lang
     , optNoPrelude :: Bool
     }
-
--- | Diagnostic language selection.
-data Lang
-  = LangTr
-  | LangEn
-  deriving (Eq, Show)
 
 -- | Renderable compiler and REPL messages.
 data CompilerMsg
@@ -568,20 +563,7 @@ renderCompilerMsgBasic msg = do
             LangTr -> renderError (rcUseColor ctx) "Dosya çalıştırılamadı."
             LangEn -> renderError (rcUseColor ctx) "File could not be executed."
       MsgEvalError evalErr ->
-        Just $
-          case rcLang ctx of
-            LangTr -> renderError (rcUseColor ctx) $
-              case evalErr of
-                Eval.Unknown -> "Değerleme hatası: bilinmeyen hata."
-                Eval.UnboundVariable name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " tanımlı değil."
-                Eval.NoMatchingFunction name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " için uygun bir tanım bulunamadı."
-                Eval.NoMatchingClause -> "Değerleme hatası: eşleşen bir dal bulunamadı."
-            LangEn -> renderError (rcUseColor ctx) $
-              case evalErr of
-                Eval.Unknown -> "Evaluation error: unknown error."
-                Eval.UnboundVariable name -> "Evaluation error: " <> T.pack (prettyIdent name) <> " is not defined."
-                Eval.NoMatchingFunction name -> "Evaluation error: no matching definition found for " <> T.pack (prettyIdent name) <> "."
-                Eval.NoMatchingClause -> "Evaluation error: no matching clause found."
+        Just $ renderError (rcUseColor ctx) $ renderEvalError (rcLang ctx) evalErr
       MsgTypeInferFailed ->
         Just $
           case rcLang ctx of

@@ -64,6 +64,34 @@ evalExp :: Exp Ann -- ^ Expression to evaluate.
         -> EvalM (Exp Ann) -- ^ Evaluated expression.
 evalExp = evalExpWith []
 
+{- | Check if a variable can be resolved in an application context.
+
+Variables in Kip can refer to different kinds of bindings stored in separate namespaces:
+- Values/definitions (evalVals)
+- Functions (evalFuncs)
+- Primitive functions (evalPrimFuncs)
+- Type constructors (evalTyCons)
+- Data constructors (evalCtors)
+- Record selectors (evalSelectors)
+
+When evaluating a standalone Var, we only look in evalVals. If not found there,
+we check if it exists in any other namespace - if so, it's a function/constructor
+reference that will be resolved when used in an App. Otherwise, it's truly undefined.
+-}
+isResolvableInAppContext :: [(Identifier, Case)] -- ^ Variable candidates.
+                         -> EvalState -- ^ Current evaluation state.
+                         -> Bool -- ^ True if resolvable in App context.
+isResolvableInAppContext varCandidates st =
+  let fnCandidates = map fst varCandidates
+      fnExists = any (\(n, _) -> n `elem` fnCandidates) (evalFuncs st)
+      primExists = any (\(n, _, _) -> n `elem` fnCandidates) (evalPrimFuncs st)
+      selectorExists = any (\(n, _) -> n `elem` fnCandidates) (evalSelectors st)
+      -- Type constructors use full candidate list (not just first elements)
+      tyExists = any (\(ident, _) -> ident `elem` map fst (evalTyCons st)) varCandidates
+      ctorExists = any (\(n, _) -> n `elem` fnCandidates) (evalCtors st)
+      randomExists = isRandomCandidate varCandidates
+  in fnExists || primExists || selectorExists || tyExists || ctorExists || randomExists
+
 -- | Evaluate an expression with a local environment.
 evalExpWith :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
             -> Exp Ann -- ^ Expression to evaluate.
@@ -77,20 +105,14 @@ evalExpWith localEnv e =
           case lookupBySuffix localEnv varName of
             Just v -> return v
             Nothing -> do
-              MkEvalState{evalVals, evalFuncs, evalPrimFuncs, evalSelectors, evalTyCons, evalCtors} <- get
+              st@MkEvalState{evalVals} <- get
               case lookupByCandidates evalVals varCandidates of
-                Nothing -> do
-                  -- Check if this refers to a function/selector/type/ctor (will be resolved in App context)
-                  let fnCandidates = map fst varCandidates
-                      fnExists = any (\(n, _) -> n `elem` fnCandidates) evalFuncs
-                      primExists = any (\(n, _, _) -> n `elem` fnCandidates) evalPrimFuncs
-                      selectorExists = any (\(n, _) -> n `elem` fnCandidates) evalSelectors
-                      tyExists = any (\(ident, _) -> ident `elem` map fst evalTyCons) varCandidates
-                      ctorExists = any (\(n, _) -> n `elem` fnCandidates) evalCtors
-                      randomExists = isRandomCandidate varCandidates
-                  if fnExists || primExists || selectorExists || tyExists || ctorExists || randomExists
-                    then return (Var annExp varName varCandidates) -- OK: function/selector/type/ctor reference
-                    else throwError (UnboundVariable varName) -- Error: truly undefined
+                Nothing ->
+                  -- Not a value binding. Check if it's a function/constructor/etc.
+                  -- that will be resolved when applied in an App context.
+                  if isResolvableInAppContext varCandidates st
+                    then return (Var annExp varName varCandidates)
+                    else throwError (UnboundVariable varName)
                 Just v -> evalExpWith localEnv v
     App {annExp = annApp, fn, args} -> do
       fn' <- evalExpWith localEnv fn
