@@ -16,7 +16,7 @@ selamlamak,
   isim olarak okuyup,
   ("Merhaba "yla ismin birleşimini) yazmaktır.
 
-selamlamak.
+selamla.
 ```
 
 ## Table of Contents
