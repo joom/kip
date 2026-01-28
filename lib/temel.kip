@@ -7,23 +7,23 @@ Bir bitim ya bitimlik olabilir.
 Bir doğruluk ya doğru ya da yanlış olabilir.
 
 (* Çokbiçimli olasılık tipi. Haskell'deki Maybe gibi. *)
-Bir (öğenin olasılığı)
+Bir öğenin olasılığı
 ya yokluk
 ya da bir öğenin varlığı olabilir.
 
 (* Çokbiçimli bağlı liste (polymorphic linked list). *)
-Bir (öğe listesi)
+Bir öğe listesi
 ya boş
 ya da bir öğenin bir öğe listesine eki
 olabilir.
 
 (* Çokbiçimli ikili çifti tipi. Haskell'deki (,) gibi. *)
-Bir (a'yla b çifti)
+Bir a'yla b çifti
 ya bir a'yla bir b ikilisi
 olabilir.
 
 (* Çokbiçimli ikili toplam tipi. Haskell'deki Either gibi. *)
-Bir (a'yla b'nin sonucu)
+Bir a'yla b'nin sonucu
 ya bir a'yla hata
 ya da bir b'yle başarı
 olabilir.

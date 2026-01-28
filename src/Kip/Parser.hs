@@ -1721,16 +1721,21 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     typeHeadInline :: KipParser (Identifier, [Ty Ann], [Identifier]) -- ^ Parsed type head.
     typeHeadInline = do
       first <- identifierNotKeyword
-      second <- optional (try (ws *> identifierNotKeyword))
-      case second of
-        Nothing -> do
+      rest <- many (try (ws *> identifierNotKeyword))
+      case rest of
+        [] -> do
+          -- Single identifier: just the type name
           rawName <- fst <$> resolveCandidatePreferNom first
           name <- normalizeTypeHead rawName
           return (name, [], [])
-        Just nameIdent -> do
+        _ -> do
+          -- Two or more identifiers: all but last are params, last is type name
+          let paramIdents = first : init rest
+              nameIdent = last rest
+          params <- mapM parseTypeParam paramIdents
           rawName <- fst <$> resolveCandidatePreferNom nameIdent
           name <- normalizeTypeHead rawName
-          return (name, [], [first])
+          return (name, params, [])
     -- | Parse a constructor with or without arguments.
     ctorWithArgs :: KipParser (Ctor Ann) -- ^ Parsed constructor with arguments.
     ctorWithArgs = try ctorArgs <|> ctor
