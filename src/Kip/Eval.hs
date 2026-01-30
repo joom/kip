@@ -243,18 +243,29 @@ matchCtor :: Identifier -- ^ Constructor identifier.
 matchCtor ctor pats v =
   case v of
     Var {varCandidates, varName} ->
-      if ctorMatches ctor (Just varName) (map fst varCandidates) && null pats
-        then Just []
+      if ctorMatches ctor (Just varName) (map fst varCandidates)
+        -- A bare constructor can be used as a unary "tag check" or as a
+        -- one-argument pattern application; anything beyond that cannot
+        -- match a Var without args.
+        then case pats of
+          [] -> Just []
+          [p] -> matchPat p (Just v)
+          _ -> Nothing
         else Nothing
     App {fn, args} ->
       case fn of
         Var {varCandidates, varName} | ctorMatches ctor (Just varName) (map fst varCandidates) ->
-          if length pats == length args
+          -- Constructor patterns are right-aligned with actual args so that
+          -- nested patterns (especially for list literals) match the tail.
+          if length pats <= length args
             then do
+              -- Drop leading args when the pattern list is shorter.
+              let args' = drop (length args - length pats) args
               -- Recursively match each sub-pattern
-              bindings <- zipWithM matchPat pats (map Just args)
+              bindings <- zipWithM matchPat pats (map Just args')
               return (concat bindings)
-            else Nothing
+            else
+              Nothing
         _ -> Nothing
     _ -> Nothing
   where

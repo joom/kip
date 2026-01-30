@@ -417,32 +417,41 @@ renderClauseIfChain scrutinee =
 -- | Render pattern bindings for nested patterns, avoiding duplicate JS declarations.
 renderPatternBindings :: Text -> [Pat Ann] -> Int -> ([Text], Int)
 renderPatternBindings scrutinee pats startIdx =
-  let (binds, idx, _) = foldl collect ([], startIdx, []) pats
+  -- Note: constructor arguments in Kip patterns are matched from the right.
+  -- We keep patLen around so we can index from the end of scrutinee.args,
+  -- which mirrors how nested patterns are aligned in the AST/typechecker.
+  let patLen = length pats
+      (binds, idx, _) = foldl (collect patLen) ([], startIdx, []) pats
   in (binds, idx)
   where
-    collect (acc, idx, seen) pat =
-      let (binds, nextIdx, seen') = renderPatBinding scrutinee idx seen pat
+    collect patLen (acc, idx, seen) pat =
+      let (binds, nextIdx, seen') = renderPatBinding scrutinee patLen idx seen pat
       in (acc ++ binds, nextIdx, seen')
 
-    renderPatBinding scrut idx seen pat =
+    -- Bind variables by walking the pattern while keeping alignment consistent
+    -- with right-anchored constructor arguments.
+    renderPatBinding scrut patLen idx seen pat =
       case pat of
         PWildcard _ -> ([], idx + 1, seen)
         PVar n _ ->
           let name = toJsIdent n
-              argAccess = scrut <> ".args[" <> T.pack (show idx) <> "]"
+              argAccess = patArgAccess scrut patLen idx
           in if name `elem` seen
                then ([], idx + 1, seen)
                else ([ "const " <> name <> " = " <> argAccess <> ";" ], idx + 1, name : seen)
         PCtor _ subPats ->
-          let argAccess = scrut <> ".args[" <> T.pack (show idx) <> "]"
+          let argAccess = patArgAccess scrut patLen idx
               (subBinds, _, seen') = renderPatternBindingsWithSeen argAccess subPats 0 seen
           in (subBinds, idx + 1, seen')
 
     renderPatternBindingsWithSeen scrut pats idx seen =
-      foldl collectWithSeen ([], idx, seen) pats
+      -- Each nested constructor has its own argument list length, so we
+      -- recompute patLen for the subpattern list.
+      let patLen = length pats
+      in foldl (collectWithSeen patLen) ([], idx, seen) pats
       where
-        collectWithSeen (acc, ix, seenAcc) p =
-          let (binds, nextIx, seen') = renderPatBinding scrut ix seenAcc p
+        collectWithSeen patLen (acc, ix, seenAcc) p =
+          let (binds, nextIx, seen') = renderPatBinding scrut patLen ix seenAcc p
           in (acc ++ binds, nextIx, seen')
 
 renderMatch :: Exp Ann -> [Clause Ann] -> Text
@@ -475,14 +484,33 @@ renderPatCond scrutinee pat =
     PWildcard _ -> "true"
     PVar _ _ -> "true"
     PCtor ctor pats ->
-      let headCond = scrutinee <> ".tag === " <> renderString (normalizeCtorName ctor)
+      -- When matching constructor patterns we need to:
+      -- 1) check the tag, 2) ensure args are long enough, and
+      -- 3) evaluate subpattern guards using right-aligned indexing.
+      let patLen = length pats
+          headCond = scrutinee <> ".tag === " <> renderString (normalizeCtorName ctor)
+          lenCond =
+            if patLen > 0
+              then scrutinee <> ".args.length >= " <> T.pack (show patLen)
+              else "true"
           argConds =
             [ cond
             | (p, idx) <- zip pats [0 ..]
-            , let cond = renderPatCond (scrutinee <> ".args[" <> T.pack (show idx) <> "]") p
+            , let cond = renderPatCond (patArgAccess scrutinee patLen idx) p
             , cond /= "true"
             ]
-      in T.intercalate " && " (headCond : argConds)
+      in T.intercalate " && " (headCond : lenCond : argConds)
+
+-- | Access constructor arguments aligned from the right.
+patArgAccess :: Text -> Int -> Int -> Text
+patArgAccess scrutinee patLen idx =
+  let idxText = T.pack (show idx)
+      lenText = T.pack (show patLen)
+      -- With right alignment, idx=0 means the *first* pattern argument
+      -- matches the *leftmost* of the last patLen elements.
+  in if patLen <= 0
+       then scrutinee <> ".args[" <> idxText <> "]"
+       else scrutinee <> ".args[(" <> scrutinee <> ".args.length - " <> lenText <> " + " <> idxText <> ")]"
 
 -- | Normalize a constructor name by stripping Turkish suffixes.
 -- Handles conditional (-sa/-se with apostrophe) and possessive (-ı/-i/-u/-ü) forms.

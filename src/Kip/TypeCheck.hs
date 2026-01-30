@@ -104,6 +104,7 @@ import Data.Word (Word8)
 import Kip.AST
 
 import Control.Monad (unless, when)
+import Control.Applicative ((<|>))
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Except
@@ -260,7 +261,7 @@ tcExp1With allowEffect e =
                         _ -> return (App annApp fn' args')
                 else do
                   argTys <- mapM inferType args'
-                  MkTCState{tcVarTys, tcCtors} <- get
+                  MkTCState{tcVarTys, tcCtors, tcCtx} <- get
                   let argCases = map (annCase . annExp) args'
                       -- Check if an argument should allow flexible case
                       shouldAllowFlexibleCase arg = case arg of
@@ -275,6 +276,25 @@ tcExp1With allowEffect e =
                               Nothing -> True  -- Function call - flexible case
                           _ -> True  -- Other function calls - flexible case
                         _ -> False  -- Other expressions require strict case matching
+                      -- If the argument still has multiple candidates,
+                      -- we can use that set to detect ambiguity between
+                      -- expected/actual cases before accepting a match.
+                      hasExpectedCaseCandidate expCase arg =
+                        let hasCase = any ((== expCase) . snd)
+                        in case arg of
+                          Var {varCandidates} -> hasCase varCandidates
+                          App {fn} -> case fn of
+                            Var {varCandidates} -> hasCase varCandidates
+                            _ -> False
+                          _ -> False
+                      -- Detect a bare accusative surface form whose base
+                      -- is in scope but the surface is not; this is used
+                      -- to reject ambiguous parses that should have been
+                      -- P3s + Acc (e.g. "varlığı" vs "varlık").
+                      isBareAccInCtx name =
+                        case stripBareAccSuffix name of
+                          Just base -> base `elem` tcCtx && name `notElem` tcCtx
+                          Nothing -> False
                       matchSig argsSig =
                         let expCases = map (annCase . annTy . snd) argsSig
                             argsForSig = fromMaybe args' (reorderByCases expCases argCases args')
@@ -284,7 +304,25 @@ tcExp1With allowEffect e =
                             -- Check for case mismatches after reordering (unless flexible case is allowed)
                             hasCaseMismatch = or (zipWith3 checkCaseMismatch expCases argCasesReordered argsForSig)
                             checkCaseMismatch expCase argCase arg =
-                              expCase /= argCase && not (shouldAllowFlexibleCase arg)
+                              let flexible = shouldAllowFlexibleCase arg
+                                  -- Ambiguous: argument was parsed as P3s but could also
+                                  -- satisfy an expected Acc case (e.g. P3s+Acc collapse).
+                                  ambiguousP3sAcc =
+                                    expCase == Acc &&
+                                    argCase == P3s &&
+                                    hasExpectedCaseCandidate expCase arg
+                                  -- Ambiguous: bare accusative form whose base is in scope.
+                                  -- We reject these for Acc expectations to avoid silently
+                                  -- accepting the wrong case; "ki" is exempt (e.g. "ilki").
+                                  ambiguousBareAcc =
+                                    expCase == Acc &&
+                                    argCase == Acc &&
+                                    case arg of
+                                      App {fn = Var {varName}} ->
+                                        not (T.isSuffixOf (T.pack "ki") (snd varName)) &&
+                                        isBareAccInCtx varName
+                                      _ -> False
+                              in ambiguousP3sAcc || ambiguousBareAcc || (expCase /= argCase && not flexible)
                         in if hasCaseMismatch
                              then Nothing  -- Reject case mismatch
                              else if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTysForSig tys)
@@ -452,6 +490,19 @@ fallbackCopulaIdent ctx (mods, word) = do
       case T.unsnoc txt of
         Just (pref, 'ğ') -> Just (pref <> T.pack "k")
         _ -> Nothing
+
+-- | Strip a bare accusative suffix (no apostrophe) from an identifier.
+-- This is intentionally narrow and only used for ambiguity detection
+-- where surface forms can collapse (p3s+acc) and mislead overload matching.
+stripBareAccSuffix :: Identifier -- ^ Surface identifier.
+                   -> Maybe Identifier -- ^ Base identifier.
+stripBareAccSuffix (mods, word) =
+  let suffixes = map T.pack ["yi", "yı", "yu", "yü", "i", "ı", "u", "ü"]
+      tryStrip suf =
+        case T.stripSuffix suf word of
+          Just base | T.length base > 1 -> Just (mods, base)
+          _ -> Nothing
+  in foldr (\s acc -> acc <|> tryStrip s) Nothing suffixes
 
 -- | Expect exactly one result from a multi-variant computation.
 expectOne :: TCM [Exp Ann] -- ^ Computation returning expressions.
@@ -824,11 +875,18 @@ inferPatTypes pat args =
       case lookup ctor tcCtors of
         Just (argTys, resTy) ->
           case unifyTypes tcTyCons [resTy] [scrutTy] of
-            Just subst -> do
-              let argTys' = map (applySubst subst) argTys
+    Just subst -> do
+      let argTys' = map (applySubst subst) argTys
+          -- Nested patterns match from the right, so we align argument
+          -- types with the pattern list by dropping leading args when
+          -- the constructor has more parameters than the pattern specifies.
+          argTysAligned =
+            if length pats < length argTys'
+              then drop (length argTys' - length pats) argTys'
+              else argTys'
               -- Recursively infer types for nested patterns
               bindings <- sequence [ inferPatTypes p [(([], T.pack "_"), ty)]
-                                   | (p, ty) <- zip pats argTys' ]
+                                   | (p, ty) <- zip pats argTysAligned ]
               return (concat bindings)
             Nothing -> do
               -- Pattern type doesn't match scrutinee type
@@ -935,7 +993,10 @@ missingVectors (t:ts) matrix = do
           rest <- missingVectors ts (map tail matrix)
           return (map (PWildcard (mkAnn Nom NoSpan) :) rest)
         Just ctors -> do
-          let wildRows = filter (isWildcardHead . head) matrix
+          -- Some rows may be empty due to earlier drops; filter them out
+          -- before inspecting heads to avoid partial pattern matches.
+          let nonEmptyRows = filter (not . null) matrix
+              wildRows = filter (isWildcardHead . head) nonEmptyRows
           if not (null wildRows)
             then do
               rest <- missingVectors ts (defaultMatrix matrix)
