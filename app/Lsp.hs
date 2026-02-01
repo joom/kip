@@ -696,7 +696,7 @@ shareCommonRoot (ns1, name1) identSet =
 
 -- | Collect all Var nodes from the AST with their names and candidates
 collectAllVars :: [Stmt Ann] -> [(Identifier, [(Identifier, Case)])]
-collectAllVars stmts = concatMap collectVarsInStmt stmts
+collectAllVars = concatMap collectVarsInStmt
   where
     collectVarsInStmt stmt = case stmt of
       Defn _ _ e -> collectVarsInExp e
