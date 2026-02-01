@@ -1,0 +1,5 @@
+(bu tam-sayı listesinin) uzunluğu,
+  bu boşsa,
+    0;
+  ilkin devama ekiyse,
+    (devamın uzunluğuyla) 1'in toplamıdır.

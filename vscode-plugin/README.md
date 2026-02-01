@@ -22,6 +22,7 @@ This extension provides Kip language support via `kip-lsp`.
 cd vscode-plugin
 npm install
 npm run compile
+code --extensionDevelopmentPath=.
 ```
 
 Use "Run Extension" in VS Code or `vsce package` to build a `.vsix`.

@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE CPP #-}
 
 -- | Language Server Protocol implementation for Kip.
 module Main (main) where
@@ -81,9 +82,17 @@ main = do
   let config = Config initialState
   let serverDef = ServerDefinition
         { defaultConfig = config
+#if MIN_VERSION_lsp_types(2,3,0)
+        , configSection = "kip"
+        , parseConfig = \cfg _ -> Right cfg
+        , onConfigChange = \_ -> return ()
+        , doInitialize = \env _ -> pure (Right env)
+        , staticHandlers = \_ -> handlers
+#else
         , onConfigurationChange = \cfg _ -> Right cfg
         , doInitialize = \env _ -> pure (Right env)
         , staticHandlers = handlers
+#endif
         , interpretHandler = \env -> Iso (runLspT env) liftIO
         , options = lspOptions
         }
@@ -115,6 +124,7 @@ handlers = mconcat
   , requestHandler SMethod_TextDocumentDefinition onDefinition
   , requestHandler SMethod_TextDocumentCompletion onCompletion
   , requestHandler SMethod_TextDocumentFormatting onFormatting
+  , requestHandler SMethod_TextDocumentDocumentHighlight onDocumentHighlight
   ]
 
 onInitialized :: TNotificationMessage 'Method_Initialized -> LspM Config ()
@@ -195,7 +205,11 @@ onDidSave msg = do
       _ <- liftIO (writeCacheForDoc st uri doc)
       return ()
 
+#if MIN_VERSION_lsp_types(2,3,0)
+onHover :: TRequestMessage 'Method_TextDocumentHover -> (Either (TResponseError 'Method_TextDocumentHover) (MessageResult 'Method_TextDocumentHover) -> LspM Config ()) -> LspM Config ()
+#else
 onHover :: TRequestMessage 'Method_TextDocumentHover -> (Either ResponseError (MessageResult 'Method_TextDocumentHover) -> LspM Config ()) -> LspM Config ()
+#endif
 onHover req respond = do
   st <- readState
   let params = req ^. L.params
@@ -222,7 +236,11 @@ onHover req respond = do
                   hover = Hover contents Nothing
               respond (Right (InL hover))
 
+#if MIN_VERSION_lsp_types(2,3,0)
+onDefinition :: TRequestMessage 'Method_TextDocumentDefinition -> (Either (TResponseError 'Method_TextDocumentDefinition) (MessageResult 'Method_TextDocumentDefinition) -> LspM Config ()) -> LspM Config ()
+#else
 onDefinition :: TRequestMessage 'Method_TextDocumentDefinition -> (Either ResponseError (MessageResult 'Method_TextDocumentDefinition) -> LspM Config ()) -> LspM Config ()
+#endif
 onDefinition req respond = do
   st <- readState
   let params = req ^. L.params
@@ -271,7 +289,11 @@ onDefinition req respond = do
                         Nothing -> respond (Right (InL (Definition (InR []))))
                         Just loc -> respond (Right (InL (Definition (InR [loc]))))
 
+#if MIN_VERSION_lsp_types(2,3,0)
+onCompletion :: TRequestMessage 'Method_TextDocumentCompletion -> (Either (TResponseError 'Method_TextDocumentCompletion) (MessageResult 'Method_TextDocumentCompletion) -> LspM Config ()) -> LspM Config ()
+#else
 onCompletion :: TRequestMessage 'Method_TextDocumentCompletion -> (Either ResponseError (MessageResult 'Method_TextDocumentCompletion) -> LspM Config ()) -> LspM Config ()
+#endif
 onCompletion req respond = do
   st <- readState
   let uri = req ^. L.params . L.textDocument . L.uri
@@ -286,7 +308,11 @@ onCompletion req respond = do
           items = map completionItem candidates
       respond (Right (InL items))
 
+#if MIN_VERSION_lsp_types(2,3,0)
+onFormatting :: TRequestMessage 'Method_TextDocumentFormatting -> (Either (TResponseError 'Method_TextDocumentFormatting) (MessageResult 'Method_TextDocumentFormatting) -> LspM Config ()) -> LspM Config ()
+#else
 onFormatting :: TRequestMessage 'Method_TextDocumentFormatting -> (Either ResponseError (MessageResult 'Method_TextDocumentFormatting) -> LspM Config ()) -> LspM Config ()
+#endif
 onFormatting req respond = do
   st <- readState
   let uri = req ^. L.params . L.textDocument . L.uri
@@ -301,11 +327,43 @@ onFormatting req respond = do
               range = Range (Position 0 0) endPos
           respond (Right (InL [TextEdit range formatted]))
 
+#if MIN_VERSION_lsp_types(2,3,0)
+onDocumentHighlight :: TRequestMessage 'Method_TextDocumentDocumentHighlight -> (Either (TResponseError 'Method_TextDocumentDocumentHighlight) (MessageResult 'Method_TextDocumentDocumentHighlight) -> LspM Config ()) -> LspM Config ()
+#else
+onDocumentHighlight :: TRequestMessage 'Method_TextDocumentDocumentHighlight -> (Either ResponseError (MessageResult 'Method_TextDocumentDocumentHighlight) -> LspM Config ()) -> LspM Config ()
+#endif
+onDocumentHighlight req respond = do
+  st <- readState
+  let params = req ^. L.params
+      uri = params ^. L.textDocument . L.uri
+      pos = params ^. L.position
+  case Map.lookup uri (lsDocs st) of
+    Nothing -> respond (Right (InL []))
+    Just doc -> do
+      let mIdent = findVarAt pos (dsStmts doc)
+          -- If not a variable use, check if clicking on a definition
+          mDefIdent = case mIdent of
+            Just _ -> mIdent
+            Nothing -> findDefinitionAt pos (dsDefSpans doc)
+      case mDefIdent of
+        Nothing -> respond (Right (InL []))
+        Just (ident, candidates) -> do
+          let allIdents = ident : map fst candidates
+          highlights <- liftIO $ findHighlights st doc pos ident allIdents
+          respond (Right (InL highlights))
+
 changeText :: TextDocumentContentChangeEvent -> Text
+#if MIN_VERSION_lsp_types(2,3,0)
+changeText (TextDocumentContentChangeEvent change) =
+  case change of
+    InL (TextDocumentContentChangePartial _ _ t) -> t
+    InR (TextDocumentContentChangeWholeDocument t) -> t
+#else
 changeText (TextDocumentContentChangeEvent change) =
   case change of
     InL rec -> rec .! #text
     InR rec -> rec .! #text
+#endif
 
 -- | Parse/typecheck and publish diagnostics.
 processDocument :: Uri -> Text -> Bool -> LspM Config ()
@@ -556,6 +614,151 @@ findVarAt pos stmts =
   in case mExp of
        Just Var{varName = name, varCandidates = candidates} -> Just (name, candidates)
        _ -> Nothing
+
+-- | Find if the cursor is on a definition and collect morphological candidates from AST
+findDefinitionAt :: Position -> Map.Map Identifier Range -> Maybe (Identifier, [(Identifier, Case)])
+findDefinitionAt pos defSpans =
+  -- Find a definition whose range contains the cursor position
+  case [(ident, range) | (ident, range) <- Map.toList defSpans, positionInRange pos range] of
+    [] -> Nothing
+    (ident, _):_ -> Just (ident, [])
+  where
+    positionInRange (Position line char) (Range (Position startLine startChar) (Position endLine endChar))
+      | line < startLine || line > endLine = False
+      | line == startLine && char < startChar = False
+      | line == endLine && char >= endChar = False
+      | otherwise = True
+
+findHighlights :: LspState -> DocState -> Position -> Identifier -> [Identifier] -> IO [DocumentHighlight]
+findHighlights _st doc _pos _ident allIdents = do
+  let stmts = dsStmts doc
+      defSpans = dsDefSpans doc
+      -- Collect all morphological variants by computing transitive closure
+      -- over all Vars in the AST and definitions
+      targetIdents = Set.fromList (collectAllRelatedIdents allIdents stmts defSpans)
+
+  -- Traverse the AST to find all variable uses that match
+  let usageHighlights = concatMap (findHighlightsInStmt targetIdents) stmts
+
+  -- Also highlight function/value definitions
+  let defHighlights = mapMaybe (highlightDefinition targetIdents) (Map.toList defSpans)
+
+  return (usageHighlights ++ defHighlights)
+
+-- | Collect all morphologically related identifiers by computing transitive closure
+collectAllRelatedIdents :: [Identifier] -> [Stmt Ann] -> Map.Map Identifier Range -> [Identifier]
+collectAllRelatedIdents initial stmts defSpans =
+  let allVarData = collectAllVars stmts
+      allDefIdents = Map.keys defSpans
+      -- Compute transitive closure: keep expanding the set of identifiers
+      -- until it stops growing, using both exact matches and prefix matches
+      closure identSet =
+        let -- Add identifiers from Var expressions
+            newFromVars = Set.fromList
+              [ ident
+              | (varName, candidates) <- allVarData
+              , let allNames = varName : map fst candidates
+              , any (\name -> name `Set.member` identSet || shareCommonRoot name identSet) allNames
+              , ident <- allNames
+              ]
+            -- Add identifiers from definitions that share a root
+            newFromDefs = Set.fromList
+              [ defIdent
+              | defIdent <- allDefIdents
+              , defIdent `Set.member` identSet || shareCommonRoot defIdent identSet
+              ]
+            combined = Set.unions [identSet, newFromVars, newFromDefs]
+        in if combined == identSet then identSet else closure combined
+  in Set.toList (closure (Set.fromList initial))
+
+-- | Check if an identifier shares a common root with any identifier in the set
+-- Two identifiers share a common root if:
+-- 1. They share a common prefix of at least 5 characters, OR
+-- 2. One is a prefix of the other (for base forms like "bastır" and "bastırmak"), OR
+-- 3. They share 4+ chars prefix and lengths differ by at most 4 (for gerund variants)
+shareCommonRoot :: Identifier -> Set.Set Identifier -> Bool
+shareCommonRoot (ns1, name1) identSet =
+  let minPrefixLen = 5
+      shortPrefixLen = 4
+      maxLenDiff = 4
+      relatedTo name2 =
+        let len1 = T.length name1
+            len2 = T.length name2
+            prefix5 = len1 >= minPrefixLen && len2 >= minPrefixLen &&
+                     T.take minPrefixLen name1 == T.take minPrefixLen name2
+            isPrefix = (len1 >= shortPrefixLen && name1 `T.isPrefixOf` name2) ||
+                      (len2 >= shortPrefixLen && name2 `T.isPrefixOf` name1)
+            similarLength = len1 >= shortPrefixLen && len2 >= shortPrefixLen &&
+                           T.take shortPrefixLen name1 == T.take shortPrefixLen name2 &&
+                           abs (len1 - len2) <= maxLenDiff
+        in prefix5 || isPrefix || similarLength
+  in any (\(ns2, name2) -> ns1 == ns2 && relatedTo name2) (Set.toList identSet)
+
+-- | Collect all Var nodes from the AST with their names and candidates
+collectAllVars :: [Stmt Ann] -> [(Identifier, [(Identifier, Case)])]
+collectAllVars stmts = concatMap collectVarsInStmt stmts
+  where
+    collectVarsInStmt stmt = case stmt of
+      Defn _ _ e -> collectVarsInExp e
+      Function _ _ _ clauses _ -> concatMap collectVarsInClause clauses
+      ExpStmt e -> collectVarsInExp e
+      _ -> []
+
+    collectVarsInClause (Clause _ body) = collectVarsInExp body
+
+    collectVarsInExp e =
+      let sub = case e of
+            App _ fn args -> collectVarsInExp fn ++ concatMap collectVarsInExp args
+            Bind _ _ body -> collectVarsInExp body
+            Seq _ a b -> collectVarsInExp a ++ collectVarsInExp b
+            Match _ scrut clauses -> collectVarsInExp scrut ++ concatMap collectVarsInClause clauses
+            Let _ _ body -> collectVarsInExp body
+            _ -> []
+          current = case e of
+            Var{varName = name, varCandidates = candidates} -> [(name, candidates)]
+            _ -> []
+      in current ++ sub
+
+-- | Create a highlight for a definition if it matches our targets
+highlightDefinition :: Set.Set Identifier -> (Identifier, Range) -> Maybe DocumentHighlight
+highlightDefinition targets (ident, range) =
+  if ident `Set.member` targets
+    then Just (DocumentHighlight range (Just DocumentHighlightKind_Text))
+    else Nothing
+
+-- | Find all highlights in a statement
+findHighlightsInStmt :: Set.Set Identifier -> Stmt Ann -> [DocumentHighlight]
+findHighlightsInStmt targets stmt =
+  case stmt of
+    Defn _ _ e -> findHighlightsInExp targets e
+    Function _ _ _ clauses _ -> concatMap (findHighlightsInClause targets) clauses
+    ExpStmt e -> findHighlightsInExp targets e
+    _ -> []
+
+-- | Find all highlights in a clause
+findHighlightsInClause :: Set.Set Identifier -> Clause Ann -> [DocumentHighlight]
+findHighlightsInClause targets (Clause _ body) = findHighlightsInExp targets body
+
+-- | Find all highlights in an expression
+findHighlightsInExp :: Set.Set Identifier -> Exp Ann -> [DocumentHighlight]
+findHighlightsInExp targets e =
+  let current = case e of
+        Var{annExp = ann, varName = name, varCandidates = candidates} ->
+          -- Check if this variable matches any of our targets
+          let allNames = name : map fst candidates
+          in [DocumentHighlight (spanToRange (annSpan ann)) (Just DocumentHighlightKind_Text)
+             | any (`Set.member` targets) allNames]
+        _ -> []
+      children = case e of
+        App _ f args -> concatMap (findHighlightsInExp targets) (f:args)
+        Bind _ _ b -> findHighlightsInExp targets b
+        Seq _ a b -> findHighlightsInExp targets a ++ findHighlightsInExp targets b
+        Match _ scr clauses ->
+          findHighlightsInExp targets scr ++ concatMap (findHighlightsInClause targets) clauses
+        Let _ _ body -> findHighlightsInExp targets body
+        _ -> []
+  in current ++ children
+
 
 lookupDefRange :: [Identifier] -> Map.Map Identifier Range -> Maybe Range
 lookupDefRange keys m =

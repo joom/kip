@@ -1,0 +1,10 @@
+{
+  "documentHighlightAt": {
+    "line": 4,
+    "character": 14,
+    "expectedRanges": [
+      [0, 25, 33],
+      [4, 13, 24]
+    ]
+  }
+}

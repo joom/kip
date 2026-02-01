@@ -12,7 +12,6 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:kip",
     "onStartupFinished",
     "*"
   ],

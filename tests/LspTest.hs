@@ -41,6 +41,7 @@ data LspSpec = LspSpec
   , specCache :: Bool
   , specCacheReuse :: Bool
   , specDefinitionAt :: Maybe DefinitionQuery
+  , specDocumentHighlightAt :: Maybe HighlightQuery
   }
 
 -- | Decode fixture expectations from JSON.
@@ -58,6 +59,7 @@ instance A.FromJSON LspSpec where
     specCache <- obj A..:? "cache" A..!= False
     specCacheReuse <- obj A..:? "cacheReuse" A..!= False
     specDefinitionAt <- obj A..:? "definitionAt"
+    specDocumentHighlightAt <- obj A..:? "documentHighlightAt"
     return LspSpec
       { specDiagnosticsAtLeast = specDiagnosticsAtLeast
       , specDiagnosticMessageContains = specDiagnosticMessageContains
@@ -71,6 +73,7 @@ instance A.FromJSON LspSpec where
       , specCache = specCache
       , specCacheReuse = specCacheReuse
       , specDefinitionAt = specDefinitionAt
+      , specDocumentHighlightAt = specDocumentHighlightAt
       }
 
 -- | Definition query position and minimum result count.
@@ -81,6 +84,13 @@ data DefinitionQuery = DefinitionQuery
   , defExpectedLine :: Maybe Int
   , defExpectedCharacter :: Maybe Int
   , defUriContains :: Maybe T.Text
+  }
+
+-- | Document highlight query with expected highlight positions.
+data HighlightQuery = HighlightQuery
+  { hlLine :: Int
+  , hlCharacter :: Int
+  , hlExpectedRanges :: [[Int]]  -- List of [line, startChar, endChar]
   }
 
 -- | Decode definition query positions from JSON.
@@ -99,6 +109,18 @@ instance A.FromJSON DefinitionQuery where
       , defExpectedLine = defExpectedLine
       , defExpectedCharacter = defExpectedCharacter
       , defUriContains = defUriContains
+      }
+
+-- | Decode highlight query from JSON.
+instance A.FromJSON HighlightQuery where
+  parseJSON = A.withObject "HighlightQuery" $ \obj -> do
+    hlLine <- obj A..: "line"
+    hlCharacter <- obj A..: "character"
+    hlExpectedRanges <- obj A..: "expectedRanges"
+    return HighlightQuery
+      { hlLine = hlLine
+      , hlCharacter = hlCharacter
+      , hlExpectedRanges = hlExpectedRanges
       }
 
 -- | Hover/completion position for LSP requests.
@@ -166,6 +188,7 @@ loadSpec path = do
       , specCache = False
       , specCacheReuse = False
       , specDefinitionAt = Nothing
+      , specDocumentHighlightAt = Nothing
       }
     else do
       bytes <- BL.readFile path
@@ -224,6 +247,11 @@ runSession lspPath uri content spec doSave = do
         Just defQuery -> do
           sendMessage inH (definitionRequest 6 uri defQuery)
           expectDefinition outH 6 uri defQuery
+      case specDocumentHighlightAt spec of
+        Nothing -> return ()
+        Just hlQuery -> do
+          sendMessage inH (documentHighlightRequest 7 uri hlQuery)
+          expectDocumentHighlight outH 7 hlQuery
       when doSave $ do
         sendMessage inH (didSaveNotification uri)
         waitForCache uri
@@ -697,6 +725,63 @@ definitionRequest reqId uri defQuery =
             ]
         ]
     ]
+
+-- | Build a documentHighlight request payload.
+documentHighlightRequest :: Int -> T.Text -> HighlightQuery -> A.Value
+documentHighlightRequest reqId uri hlQuery =
+  A.object
+    [ "jsonrpc" A..= ("2.0" :: String)
+    , "id" A..= reqId
+    , "method" A..= ("textDocument/documentHighlight" :: String)
+    , "params" A..= A.object
+        [ "textDocument" A..= A.object ["uri" A..= uri]
+        , "position" A..= A.object
+            [ "line" A..= hlLine hlQuery
+            , "character" A..= hlCharacter hlQuery
+            ]
+        ]
+    ]
+
+-- | Expect document highlight results matching the expected ranges.
+expectDocumentHighlight :: Handle -> Int -> HighlightQuery -> IO ()
+expectDocumentHighlight h target hlQuery = do
+  obj <- awaitResponseId h target
+  let highlights = extractHighlights obj
+      expected = hlExpectedRanges hlQuery
+  assertEqual "highlight count mismatch" (length expected) (length highlights)
+  mapM_ (assertHighlightMatch highlights) expected
+
+-- | Extract highlight ranges from a response.
+extractHighlights :: A.Object -> [[Int]]
+extractHighlights obj =
+  case lookupKey "result" obj of
+    Just (A.Array items) -> mapMaybe extractRange (toList items)
+    _ -> []
+
+-- | Extract [line, startChar, endChar] from a DocumentHighlight.
+extractRange :: A.Value -> Maybe [Int]
+extractRange =
+  \case
+    A.Object obj ->
+      case lookupKey "range" obj of
+        Just (A.Object rangeObj) ->
+          case (lookupKey "start" rangeObj, lookupKey "end" rangeObj) of
+            (Just (A.Object startObj), Just (A.Object endObj)) ->
+              case (lookupKey "line" startObj, lookupKey "character" startObj, lookupKey "character" endObj) of
+                (Just (A.Number line), Just (A.Number startChar), Just (A.Number endChar)) ->
+                  case (toBoundedInteger line, toBoundedInteger startChar, toBoundedInteger endChar) of
+                    (Just l, Just s, Just e) -> Just [l, s, e]
+                    _ -> Nothing
+                _ -> Nothing
+            _ -> Nothing
+        _ -> Nothing
+    _ -> Nothing
+
+-- | Assert a highlight range exists in the results.
+assertHighlightMatch :: [[Int]] -> [Int] -> IO ()
+assertHighlightMatch highlights expected =
+  unless (expected `elem` highlights) $
+    assertFailure ("missing highlight range: " ++ show expected)
 
 -- | Build a shutdown request payload.
 shutdownRequest :: Int -> A.Value

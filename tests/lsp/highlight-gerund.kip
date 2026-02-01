@@ -1,0 +1,6 @@
+(bu tam-sayı listesinin) bastırmak,
+  bu boşsa,
+    durmaktır;
+  ilkin devama ekiyse,
+    ilki bastırıp,
+    devamı bastırmaktır.
